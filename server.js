@@ -428,11 +428,8 @@ setTimeout(runLowStockCron, 120 * 1000);
 setInterval(runLowStockCron, 3 * 60 * 60 * 1000);
 
 const server = http.createServer(async (req, res) => {
-  if (!applyCors(req, res)) {
-    res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
-    res.end("Forbidden");
-    return;
-  }
+ res.setHeader("Access-Control-Allow-Origin", "https://weavestackit.online");
+res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
