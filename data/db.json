@@ -1,0 +1,137 @@
+{
+  "meta": {
+    "schemaVersion": 3,
+    "createdAt": "2026-08-14T03:43:55.651Z",
+    "updatedAt": "2026-08-15T05:30:27.254Z"
+  },
+  "users": [
+    {
+      "id": "user_1786679475358_n5fagv",
+      "company": "mam tools per",
+      "email": "mamtoolsper@gmail.com",
+      "phone": "",
+      "country": "",
+      "salt": "bfc3a53c41054f7026cbe19bca29e97e",
+      "passwordHash": "998928b8254c3aed2a72f9a2c2709f704691457b3ec3d38602fd18f4d1312fc8d5799ea000e2b297c953753a3ff16d2b50187b1cd4382b2b2d48ff48ac52b156",
+      "plan": "Admin",
+      "paid": true,
+      "isAdmin": true,
+      "addUsage": 0,
+      "photoURL": "https://lh3.googleusercontent.com/a/ACg8ocKUbUglyod8NmxF6yi_Y28gu-nmAaZc3XQA-ipoLWuzo0yPSQ=s96-c",
+      "authProvider": "google",
+      "subscriptionExpiry": "",
+      "subscriptionMonths": 0,
+      "lastRenewalDate": "",
+      "settings": {}
+    },
+    {
+      "id": "user_1786679839991_elgyoz",
+      "company": "Mr Lufu",
+      "email": "lufumr@gmail.com",
+      "phone": "",
+      "country": "",
+      "salt": "da69a9470a481bfb7d12ffe64c7d1a27",
+      "passwordHash": "71703bc7c168846a6b1e36a9536170340f9166829af5a56a6e16f39963d629eafd33d6865312ebeabfa9f05c89e7adf0dc853e7395335d6d597772447bd24233",
+      "plan": "Free",
+      "paid": false,
+      "isAdmin": false,
+      "addUsage": 0,
+      "photoURL": "https://lh3.googleusercontent.com/a/ACg8ocLArOlF6Rjex1eI6nOPARjg4govojI9kwZ6KfbnScV2X07pNA=s96-c",
+      "authProvider": "google",
+      "subscriptionExpiry": "",
+      "subscriptionMonths": 0,
+      "lastRenewalDate": "",
+      "settings": {}
+    },
+    {
+      "id": "user_1786771158418_7jyp24",
+      "company": "Ocean SFT",
+      "email": "admin@oceansft.com",
+      "phone": "",
+      "country": "",
+      "salt": "922c6b1d51527536cb3ec32c7db60301",
+      "passwordHash": "6dc0122a2b3a0f12ccb61f4c0aebc46dbf7dfc5632b6c2033e871e367e4400ffdc00751a50424baeabbd12f0ebaddfe81a40bead062ad31541d2e7af90371aca",
+      "plan": "Admin",
+      "paid": true,
+      "isAdmin": true,
+      "addUsage": 0,
+      "photoURL": "",
+      "authProvider": "",
+      "subscriptionExpiry": "",
+      "subscriptionMonths": 0,
+      "lastRenewalDate": "",
+      "settings": {},
+      "founder": true
+    },
+    {
+      "id": "user_1786771826981_t8d7yg",
+      "company": "Normal",
+      "email": "normal@example.com",
+      "phone": "",
+      "country": "",
+      "salt": "9367a72d892b3b84c1effd3510a002ad",
+      "passwordHash": "4fe0df4fea5822e4c3fb865acab3fa5f0be1f1d8a1eebbaa922dfb632c09b6cff26781251f67ece312db87a10311abb3a4c513eb76fc43a1c1bb56f387a4af30",
+      "plan": "Free",
+      "paid": false,
+      "isAdmin": true,
+      "addUsage": 0,
+      "photoURL": "",
+      "authProvider": "",
+      "subscriptionExpiry": "",
+      "subscriptionMonths": 0,
+      "lastRenewalDate": "",
+      "settings": {}
+    }
+  ],
+  "sessions": [
+    {
+      "token": "73b76eefe874b513098132066d8751117b797f4c3670da60cd41aaaa29cd2f65",
+      "userId": "user_1786679475358_n5fagv",
+      "createdAt": "2026-08-14T03:51:15.450Z",
+      "expiresAt": 1789271475450
+    },
+    {
+      "token": "731b58cc518a6d01742e27629e60a31de81ae3f0ff26b30c4c638ec7c3f9183c",
+      "userId": "user_1786679839991_elgyoz",
+      "createdAt": "2026-08-14T03:57:20.043Z",
+      "expiresAt": 1789271840043
+    },
+    {
+      "token": "f97368939243efe791915ac7566ca3a8538e21480d3f41ffb57cf0f80b53e9c9",
+      "userId": "user_1786771826981_t8d7yg",
+      "createdAt": "2026-08-15T05:30:27.032Z",
+      "expiresAt": 1789363827032
+    },
+    {
+      "token": "e0ca6c2c20aa388b84c09923fe4a5711814fb505f52e5e6dd4c3482620bde9ce",
+      "userId": "user_1786771158418_7jyp24",
+      "createdAt": "2026-08-15T05:30:27.207Z",
+      "expiresAt": 1789363827207
+    }
+  ],
+  "storage": {
+    "user_1786679475358_n5fagv": {},
+    "user_1786679839991_elgyoz": {},
+    "user_1786771158418_7jyp24": {},
+    "user_1786771826981_t8d7yg": {}
+  },
+  "platform": {},
+  "tickets": [],
+  "ticket_messages": [],
+  "incidents": [],
+  "ai_actions": [],
+  "alerts": [],
+  "system_logs": [],
+  "monitoring_events": [],
+  "customer_context": [],
+  "escalation_queue": [],
+  "user_roles": [],
+  "payments": [],
+  "whatsapp_messages": [],
+  "whatsapp_broadcast_log": [],
+  "pharmacy_docs": [],
+  "gym_docs": [],
+  "jobs": [],
+  "services": [],
+  "_cron_emails_sent": "{}"
+}
