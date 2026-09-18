@@ -280,12 +280,10 @@ function apiSummary(db) {
   };
 }
 
-try {
-  bootDb();
-} catch (e) {
+bootDb().catch(function(e) {
   writeBootStatus("BOOT FAILED (node " + process.version + "): " + (e && e.stack ? e.stack : e));
-  throw e;
-}
+  process.exit(1);
+});
 
 // ============ SUBSCRIPTION CRON ============
 // Scans every hour for expiring/expired subscriptions and sends emails.
