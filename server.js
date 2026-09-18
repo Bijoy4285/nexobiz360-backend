@@ -15,7 +15,7 @@ function writeBootStatus(msg) {
 }
 writeBootStatus("BOOTING " + new Date().toISOString());
 
-const { readDb, writeDb } = require("./lib/db");
+const { readDb, writeDb, initDb } = require("./lib/db");
 const { json, parseBody } = require("./lib/http");
 const { makeUser, makeGoogleUser, verifyPassword, createPasswordHash, sanitizeUser, createSession, getSessionUser, requireAdmin, isAdminEmail, ADMIN_EMAILS, isSubscriptionActive, getSubscriptionDaysLeft, setSubscription, migrateUsers } = require("./lib/auth");
 const { seedAdmins } = require("./services/seed");
