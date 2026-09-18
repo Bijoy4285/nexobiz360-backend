@@ -123,9 +123,16 @@ function handleEcosystem(req, res, user) {
     try { udb.exec("ATTACH DATABASE '" + String(DB_PATH).replace(/'/g,"''") + "' AS reg"); } catch(e){}
     return udb;
   }
-  function getStore(storeId) {
-    if (!db) return null;
-    try { return db.prepare('SELECT * FROM reg.stores WHERE id = ? OR slug = ?').get(storeId, storeId) || null; } catch(e){ return null; }
+    function getStore(storeId) {
+    try {
+      var reg = require('../lib/ecosystem-db').getDb();
+      var row = reg.prepare('SELECT * FROM stores WHERE id = ? OR slug = ?').get(storeId, storeId) || null;
+      try { reg.close(); } catch(e) {}
+      return row;
+    } catch (e) {
+      console.error('[getStore] failed:', e.message);
+      return null;
+    }
   }
   function switchToStoreOwner(storeId) {
     var s = getStore(storeId);
