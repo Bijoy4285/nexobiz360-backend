@@ -179,7 +179,8 @@ function verifyWebhookSignature(req) {
   return param === verifyToken;
 }
 
-function bootDb() {
+async function bootDb() {
+  await initDb();
   const db = readDb();
   seedAdmins(db);
   migrateUsers(db.users);
