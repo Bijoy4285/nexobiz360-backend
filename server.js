@@ -16,6 +16,7 @@ function writeBootStatus(msg) {
 writeBootStatus("BOOTING " + new Date().toISOString());
 
 const { readDb, writeDb, initDb } = require("./lib/db");
+const { restoreAllDbFiles, backupAllDbFiles } = require("./lib/sqlite-cloud-sync");
 const { json, parseBody } = require("./lib/http");
 const { makeUser, makeGoogleUser, verifyPassword, createPasswordHash, sanitizeUser, createSession, getSessionUser, requireAdmin, isAdminEmail, ADMIN_EMAILS, isSubscriptionActive, getSubscriptionDaysLeft, setSubscription, migrateUsers } = require("./lib/auth");
 const { seedAdmins } = require("./services/seed");
@@ -185,8 +186,39 @@ async function bootDb() {
   seedAdmins(db);
   migrateUsers(db.users);
   writeDb(db);
+
+  // Restore SQLite store files from MongoDB before using them.
+  await restoreAllDbFiles();
+
   initEcosystemDb();
   migrateLegacyData();
+
+  // Backup every 5 minutes so recent store data is never lost.
+  setInterval(function () {
+    backupAllDbFiles().catch(function (e) {
+      console.error("[sqlite-cloud-sync] periodic backup failed:", e.message);
+    });
+  }, 5 * 60 * 1000);
+
+  // Backup immediately when Render sends a shutdown signal
+  // (this happens right before every redeploy/restart/sleep).
+  var shuttingDown = false;
+  function handleShutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log("[sqlite-cloud-sync] " + signal + " received — backing up before shutdown...");
+    backupAllDbFiles()
+      .then(function () {
+        console.log("[sqlite-cloud-sync] Final backup complete.");
+        process.exit(0);
+      })
+      .catch(function (e) {
+        console.error("[sqlite-cloud-sync] Final backup failed:", e.message);
+        process.exit(0);
+      });
+  }
+  process.on("SIGTERM", function () { handleShutdown("SIGTERM"); });
+  process.on("SIGINT", function () { handleShutdown("SIGINT"); });
 }
 
 function resolveFilePath(urlPath) {
