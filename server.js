@@ -2088,6 +2088,12 @@ const body = await parseBody(req);
     const ecoResult = await handleEcosystem(req, res, user);
     if (ecoResult !== null) return;
   }
+      // Cloud Storage API routes (universal localStorage-to-server sync)
+  if (urlPath.startsWith('/api/storage/')) {
+    const cloudStorage = require('./services/cloud-storage-api');
+    const storageResult = await cloudStorage.handleRoutes(urlPath, req, res, user);
+    if (storageResult !== false) return;
+  }
 
   // SuperShop API routes
   if (urlPath.startsWith('/api/supershop/')) {
