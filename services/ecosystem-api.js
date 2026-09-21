@@ -431,22 +431,22 @@ if (urlPath === '/api/ecosystem/stores' && method === 'GET') {
   var stores;
   
   // ✅ FIX: Filter by owner unless admin
-  var ownerId = user ? user.id : null;
-  var isAdmin = user && user.isAdmin;
-  
-  if (type) {
-    if (isAdmin || !ownerId) {
-      stores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 AND type = ? ORDER BY name').all(type);
-    } else {
-      stores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 AND type = ? AND owner_id = ? ORDER BY name').all(type, ownerId);
-    }
+ var myOwnerId = user ? user.id : null;
+var isAdmin = user && user.isAdmin;
+
+if (type) {
+  if (isAdmin || !myOwnerId) {
+    stores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 AND type = ? ORDER BY name').all(type);
   } else {
-    if (isAdmin || !ownerId) {
-      stores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 ORDER BY name').all();
-    } else {
-      stores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 AND owner_id = ? ORDER BY name').all(ownerId);
-    }
+    stores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 AND type = ? AND owner_id = ? ORDER BY name').all(type, myOwnerId);
   }
+} else {
+  if (isAdmin || !myOwnerId) {
+    stores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 ORDER BY name').all();
+  } else {
+    stores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 AND owner_id = ? ORDER BY name').all(myOwnerId);
+  }
+}
   
   stores.forEach(function(s) {
     var stats = reviewStatsFor(s.id);
