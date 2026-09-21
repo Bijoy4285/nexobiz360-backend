@@ -424,24 +424,38 @@ function handleEcosystem(req, res, user) {
       });
     }
 
-    // ============ STORES (registry - global) ============
-    if (urlPath === '/api/ecosystem/stores' && method === 'GET') {
-      var type = '';
-      try { var u = new URL(req.url, 'http://localhost'); type = u.searchParams.get('type') || ''; } catch(e) {}
-      var stores;
-      if (type) {
-        stores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 AND type = ? ORDER BY name').all(type);
-      } else {
-        stores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 ORDER BY name').all();
-      }
-      stores.forEach(function(s) {
-        var stats = reviewStatsFor(s.id);
-        s.review_count = stats.review_count;
-        s.avg_rating = stats.avg_rating;
-        normalizeStore(s);
-      });
-      return json(res, 200, { ok: true, stores: stores });
+   // ============ STORES (registry - global) ============
+if (urlPath === '/api/ecosystem/stores' && method === 'GET') {
+  var type = '';
+  try { var u = new URL(req.url, 'http://localhost'); type = u.searchParams.get('type') || ''; } catch(e) {}
+  var stores;
+  
+  // ✅ FIX: Filter by owner unless admin
+  var ownerId = user ? user.id : null;
+  var isAdmin = user && user.isAdmin;
+  
+  if (type) {
+    if (isAdmin || !ownerId) {
+      stores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 AND type = ? ORDER BY name').all(type);
+    } else {
+      stores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 AND type = ? AND owner_id = ? ORDER BY name').all(type, ownerId);
     }
+  } else {
+    if (isAdmin || !ownerId) {
+      stores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 ORDER BY name').all();
+    } else {
+      stores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 AND owner_id = ? ORDER BY name').all(ownerId);
+    }
+  }
+  
+  stores.forEach(function(s) {
+    var stats = reviewStatsFor(s.id);
+    s.review_count = stats.review_count;
+    s.avg_rating = stats.avg_rating;
+    normalizeStore(s);
+  });
+  return json(res, 200, { ok: true, stores: stores });
+}
 
     // ============ PUBLIC STORES (no auth) ============
     if (urlPath === '/api/ecosystem/stores/public' && method === 'GET') {
