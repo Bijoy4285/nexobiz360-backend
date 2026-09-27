@@ -406,11 +406,40 @@ function paymentReceiptEmail(name, paymentId, amount, planLabel, months, expiryD
     actionLabel: 'View Your Account'
   });
 }
+function passwordResetEmail(name, resetUrl) {
+  return renderEmail({
+    title: 'Reset Your Password',
+    subtitle: 'We received a request to reset your Ocean SFT password.',
+    body:
+      '<p style="color:#475569;font-size:14px;line-height:1.6;">Hi <strong>' + (name || 'there') + '</strong>,</p>' +
+      '<p style="color:#475569;font-size:14px;line-height:1.6;">Click the button below to choose a new password for your Ocean SFT account.</p>' +
+      '<div style="text-align:center;margin:18px 0;">' + badge('Valid for 30 minutes', '#d97706') + '</div>' +
+      '<p style="color:#94a3b8;font-size:12px;line-height:1.6;margin-top:20px;">If you did not request a password reset, you can safely ignore this email — your password will remain unchanged.</p>' +
+      '<p style="color:#94a3b8;font-size:12px;line-height:1.6;margin-top:10px;">If the button above doesn\'t work, copy and paste this link into your browser:<br>' +
+      '<a href="' + resetUrl + '" style="color:#2563eb;word-break:break-all;">' + resetUrl + '</a></p>',
+    actionUrl: resetUrl,
+    actionLabel: 'Reset My Password'
+  });
+}
 
+function passwordChangedEmail(name) {
+  return renderEmail({
+    title: 'Your Password Was Changed',
+    subtitle: 'This is a confirmation that your password has been updated.',
+    body:
+      '<p style="color:#475569;font-size:14px;line-height:1.6;">Hi <strong>' + (name || 'there') + '</strong>,</p>' +
+      '<p style="color:#475569;font-size:14px;line-height:1.6;">Your Ocean SFT account password was just changed successfully.</p>' +
+      '<div style="text-align:center;margin:18px 0;">' + badge('Password updated', '#16a34a') + '</div>' +
+      '<p style="color:#94a3b8;font-size:12px;line-height:1.6;margin-top:20px;">If you did not make this change, please contact our support team immediately to secure your account.</p>',
+    actionUrl: BRAND.dashboardUrl,
+    actionLabel: 'Go to Dashboard'
+  });
+}
 module.exports = {
   BRAND, renderEmail, welcomeEmail, thanksEmail, notificationEmail, storeRegisteredEmail, adminAlertEmail,
   orderConfirmationEmail, bookingConfirmationEmail, storeLiveEmail, storeRejectedEmail,
   wrapper, btn, badge, summaryTable,
   subscriptionActivatedEmail, subscriptionRenewalReminderEmail, subscriptionExpiredEmail, subscriptionRenewalConfirmedEmail,
-  paymentDueEmail, membershipWelcomeEmail, paymentReceiptEmail, accountRoleEmail, planUpdatedEmail
+   paymentDueEmail, membershipWelcomeEmail, paymentReceiptEmail, accountRoleEmail, planUpdatedEmail,
+  passwordResetEmail, passwordChangedEmail
 };
