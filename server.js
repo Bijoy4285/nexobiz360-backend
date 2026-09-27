@@ -572,7 +572,7 @@ sendEmail(
 }).catch(function (err) {
   console.log("EMAIL SEND ERROR:", err.message || err);
 });
-
+}
       return json(res, 200, {
         ok: true,
         message: "If an account exists with that email, a password reset link has been sent."
