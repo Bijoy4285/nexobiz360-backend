@@ -1,4 +1,6 @@
-﻿const http = require("http");
+const dns = require('dns');
+dns.setDefaultResultOrder('ipv4first');
+const http = require("http");
 const fs = require("fs");
 const path = require("path");
 
