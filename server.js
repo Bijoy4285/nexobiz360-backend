@@ -629,7 +629,7 @@ if (urlPath === "/api/auth/logout" && req.method === "POST") {
     }
   }
 
-  if (urlPath === "/api/auth/profile" && req.method === "PUT") {
+  
   if (urlPath === "/api/auth/profile" && req.method === "PUT") {
     if (!user) return json(res, 401, { error: "Unauthorized" });
     try {
