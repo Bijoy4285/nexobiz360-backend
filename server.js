@@ -563,13 +563,15 @@ if (urlPath === "/api/auth/logout" && req.method === "POST") {
         const baseUrl = (req.headers["x-forwarded-proto"] || "https") + "://" + (req.headers.host || "weavestackit.online");
         const resetUrl = baseUrl + "/reset-password?token=" + rawToken;
         const emailTemplates = require("./services/email-templates");
-
-        sendEmail(
-          found.email,
-          "Reset Your Password - Ocean SFT",
-          emailTemplates.passwordResetEmail(found.company || found.email, resetUrl)
-        ).catch(function () {});
-      }
+sendEmail(
+  found.email,
+  "Reset Your Password - Nexobiz360",
+  emailTemplates.passwordResetEmail(found.company || found.email, resetUrl)
+).then(function(result) {
+  console.log("EMAIL SEND RESULT:", JSON.stringify(result));
+}).catch(function (err) {
+  console.log("EMAIL SEND ERROR:", err.message || err);
+});
 
       return json(res, 200, {
         ok: true,
