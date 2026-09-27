@@ -58,7 +58,7 @@ async function sendEmail(to, subject, htmlBody) {
   return new Promise((resolve) => {
     const payload = JSON.stringify({
       personalizations: [{ to: [{ email: to }] }],
-      from: { email: process.env.FROM_EMAIL || "noreply@oceansft.com", name: "Ocean SFT" },
+      from: { email: process.env.FROM_EMAIL || "noreply@oceansft.com", name: "Nexobiz360" },
       subject,
       content: [{ type: "text/html", value: htmlBody }]
     });
