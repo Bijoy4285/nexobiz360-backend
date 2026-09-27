@@ -72,6 +72,7 @@ const PUBLIC_FILES = new Set([
   "pos.html",
   "qr-menu.html",
   "restaurant.html",
+ "reset-password.html",
   "scanner.html",
   "store.html",
   "supply-chain.html",
@@ -538,6 +539,97 @@ if (urlPath === "/api/auth/logout" && req.method === "POST") {
     return json(res, 200, { ok: true });
   }
 
+  // ============ FORGOT PASSWORD ============
+  if (urlPath === "/api/auth/forgot-password" && req.method === "POST") {
+    try {
+      const ip = req.socket.remoteAddress || "unknown";
+      if (rateLimited(ip, "forgot-password")) {
+        return json(res, 429, { error: "Too many requests. Please try again later." });
+      }
+      const body = await parseBody(req);
+      const email = String(body.email || "").trim().toLowerCase();
+
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return json(res, 400, { error: "Please enter a valid email address." });
+      }
+
+      const found = db.users.find(u => u.email === email);
+
+      if (found) {
+        const { createPasswordResetToken } = require("./lib/auth");
+        const rawToken = createPasswordResetToken(db, found.id);
+        writeDb(db);
+
+        const baseUrl = (req.headers["x-forwarded-proto"] || "https") + "://" + (req.headers.host || "weavestackit.online");
+        const resetUrl = baseUrl + "/reset-password?token=" + rawToken;
+        const emailTemplates = require("./services/email-templates");
+
+        sendEmail(
+          found.email,
+          "Reset Your Password - Ocean SFT",
+          emailTemplates.passwordResetEmail(found.company || found.email, resetUrl)
+        ).catch(function () {});
+      }
+
+      return json(res, 200, {
+        ok: true,
+        message: "If an account exists with that email, a password reset link has been sent."
+      });
+    } catch (error) {
+      console.error("Forgot password error:", error);
+      return json(res, 400, { error: "Request failed. Please try again." });
+    }
+  }
+
+  if (urlPath === "/api/auth/reset-password" && req.method === "POST") {
+    try {
+      const ip = req.socket.remoteAddress || "unknown";
+      if (rateLimited(ip, "reset-password")) {
+        return json(res, 429, { error: "Too many attempts. Please try again later." });
+      }
+      const body = await parseBody(req);
+      const token = String(body.token || "").trim();
+      const newPassword = String(body.newPassword || "").trim();
+
+      if (!token) return json(res, 400, { error: "Reset token is missing." });
+      if (newPassword.length < 6) return json(res, 400, { error: "Password must be at least 6 characters." });
+
+      const { verifyPasswordResetToken, consumePasswordResetToken, createPasswordHash } = require("./lib/auth");
+      const entry = verifyPasswordResetToken(db, token);
+      if (!entry) return json(res, 400, { error: "This reset link is invalid or has expired. Please request a new one." });
+
+      const targetUser = db.users.find(u => u.id === entry.userId);
+      if (!targetUser) return json(res, 404, { error: "Account not found." });
+
+      targetUser.salt = require("crypto").randomBytes(16).toString("hex");
+      targetUser.passwordHash = createPasswordHash(newPassword, targetUser.salt);
+
+      consumePasswordResetToken(entry);
+
+      db.sessions = db.sessions.filter(s => s.userId !== targetUser.id);
+
+      writeDb(db);
+
+      if (targetUser.email) {
+        const emailTemplates = require("./services/email-templates");
+        sendEmail(
+          targetUser.email,
+          "Your Password Was Changed - Ocean SFT",
+          emailTemplates.wrapper(
+            '<p>Your Ocean SFT account password was just changed.</p>' +
+            '<p style="color:#64748b;font-size:13px;">If you did not make this change, please contact support immediately.</p>'
+          )
+        ).catch(function () {});
+      }
+
+      return json(res, 200, { ok: true, message: "Your password has been reset successfully. Please sign in." });
+    } catch (error) {
+      console.error("Reset password error:", error);
+      return json(res, 400, { error: "Password reset failed. Please try again." });
+    }
+  }
+
+  if (urlPath === "/api/auth/profile" && req.method === "PUT") {
   if (urlPath === "/api/auth/profile" && req.method === "PUT") {
     if (!user) return json(res, 401, { error: "Unauthorized" });
     try {
