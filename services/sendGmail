@@ -22,9 +22,12 @@ async function sendGmail(to, subject, htmlBody) {
   let transporter;
   try {
     transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD }
-    });
+  host: "smtp.gmail.com",
+  port: 465,
+  secure: true,
+  family: 4,
+  auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD }
+});
   } catch (e) {
     return { ok: false, provider: "gmail", error: e.message };
   }
