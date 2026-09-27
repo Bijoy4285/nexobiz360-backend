@@ -1,7 +1,7 @@
 ﻿// Ocean SFT branded email templates
 // All emails include the app logo, name, and a consistent design.
 
-const APP_URL = process.env.APP_URL || "https://oceansft.mamglobalcorporation.com";
+const APP_URL = process.env.APP_URL || "https://nexobiz360.weavestackit.online";
 const BRAND = {
   name: "Ocean SFT",
   tagline: "All-in-one business management",
