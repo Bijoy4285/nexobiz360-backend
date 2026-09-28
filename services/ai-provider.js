@@ -175,7 +175,7 @@ async function aiChat(messages, context) {
     // Send only minimal, non-sensitive context (never email/plans/ids) to keep replies clean.
     var ctx = context || {};
     var safeCtx = { company: (ctx.user && ctx.user.company) || "", moduleCount: ctx.moduleCount || 0 };
-    const instruction = "You are Ocean SFT AI, a helpful assistant for the Ocean SFT business platform. " +
+    const instruction = "You are Nexobiz360 AI, a helpful assistant for the Nexobiz360 business platform. " +
       "Answer this question directly and concisely in a friendly way. " +
       "NEVER repeat, quote, or mention anything about memory, known-facts, conversation history, other users, or metadata. " +
       "Do not echo the request back. Output only the answer.";
@@ -188,7 +188,7 @@ async function aiChat(messages, context) {
   }
   const systemMsg = {
     role: "system",
-    content: SYSTEM_PROMPT + "\n\nYou are Ocean SFT AI assistant. Help users with their business operations. Be concise and helpful.\n\nContext: " + JSON.stringify(context || {}).slice(0, 1000)
+    content: SYSTEM_PROMPT + "\n\nYou are Nexobiz360 AI assistant. Help users with their business operations. Be concise and helpful.\n\nContext: " + JSON.stringify(context || {}).slice(0, 1000)
   };
   const allMessages = [systemMsg, ...messages];
   return callOpenAI(allMessages);
@@ -197,7 +197,7 @@ async function aiChat(messages, context) {
 async function generateReport(data) {
   if (isCommanderConfigured()) {
     const prompt = "Generate a concise business report from this data. Respond with JSON only: {summary, revenue, orders, trends:[], recommendations:[]}.\nData: " + JSON.stringify(data).slice(0, 1500);
-    const r = await callCommander(prompt, [], "Ocean SFT business report");
+    const r = await callCommander(prompt, [], "Nexobiz360 business report");
     if (r.ok) {
       try {
         const parsed = JSON.parse(r.content);
@@ -238,7 +238,7 @@ async function generateReport(data) {
 async function predictSales(historicalData) {
   if (isCommanderConfigured()) {
     const prompt = "Analyze this sales data and predict future sales. Respond with JSON only: {nextDayEstimate, weeklyForecast, confidence, trend, insights:[]}.\nData: " + JSON.stringify(historicalData).slice(0, 1500);
-    const r = await callCommander(prompt, [], "Ocean SFT sales prediction");
+    const r = await callCommander(prompt, [], "Nexobiz360 sales prediction");
     if (r.ok) {
       try {
         const parsed = JSON.parse(r.content);
