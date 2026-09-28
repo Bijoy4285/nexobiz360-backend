@@ -345,22 +345,22 @@ function runSubscriptionCron() {
 
       // 7-day reminder (range so restarts never miss it)
       if (daysLeft > 3 && daysLeft <= 7 && !sent[emailKey + "7d"]) {
-        sendEmail(u.email, "Subscription expires in " + daysLeft + " days - Ocean SFT", emailTemplates.subscriptionRenewalReminderEmail(planLabel, daysLeft, expiryDate)).catch(function(){});
+        sendEmail(u.email, "Subscription expires in " + daysLeft + " days - Nexobiz360", emailTemplates.subscriptionRenewalReminderEmail(planLabel, daysLeft, expiryDate)).catch(function(){});
         sent[emailKey + "7d"] = now;
       }
       // 3-day reminder (range so restarts never miss it)
       if (daysLeft > 1 && daysLeft <= 3 && !sent[emailKey + "3d"]) {
-        sendEmail(u.email, "Subscription expires in " + daysLeft + " days - Ocean SFT", emailTemplates.subscriptionRenewalReminderEmail(planLabel, daysLeft, expiryDate)).catch(function(){});
+        sendEmail(u.email, "Subscription expires in " + daysLeft + " days - Nexobiz360", emailTemplates.subscriptionRenewalReminderEmail(planLabel, daysLeft, expiryDate)).catch(function(){});
         sent[emailKey + "3d"] = now;
       }
       // 1-day reminder (range so restarts never miss it)
       if (daysLeft === 1 && !sent[emailKey + "1d"]) {
-        sendEmail(u.email, "Subscription expires tomorrow - Ocean SFT", emailTemplates.subscriptionRenewalReminderEmail(planLabel, 1, expiryDate)).catch(function(){});
+        sendEmail(u.email, "Subscription expires tomorrow - Nexobiz360", emailTemplates.subscriptionRenewalReminderEmail(planLabel, 1, expiryDate)).catch(function(){});
         sent[emailKey + "1d"] = now;
       }
       // Expired notification
       if (daysLeft <= 0 && !sent[emailKey + "expired"]) {
-        sendEmail(u.email, "Subscription expired - Ocean SFT", emailTemplates.subscriptionExpiredEmail(planLabel, expiryDate)).catch(function(){});
+        sendEmail(u.email, "Subscription expired - Nexobiz360", emailTemplates.subscriptionExpiredEmail(planLabel, expiryDate)).catch(function(){});
         sent[emailKey + "expired"] = now;
       }
     });
@@ -397,7 +397,7 @@ function runPaymentDueCron() {
       try { var s = ecoDb.prepare('SELECT name FROM stores WHERE id = ?').get(p.store_id || ''); storeName = s ? s.name : ''; } catch(e){}
       var mods = '';
       try { var arr = JSON.parse(p.module_names || '[]'); mods = (Array.isArray(arr) ? arr : []).join(', '); } catch(e) {}
-      sendEmail(p.email, "Action Required: Your payment is still pending - Ocean SFT",
+      sendEmail(p.email, "Action Required: Your payment is still pending - Nexobiz360",
         emailTemplates.paymentDueEmail(p.email, p.amount, null, storeName, p.id, mods)).catch(function(){});
       sent[key] = now;
       changed = true;
@@ -498,10 +498,10 @@ res.setHeader("Access-Control-Allow-Credentials", "true");
       db.storage[next.id] = {};
       const token = createSession(db, next.id);
       writeDb(db);
-      // Send welcome email (non-blocking, branded Ocean SFT template)
+      // Send welcome email (non-blocking, branded Nexobiz360 template)
       if (email) {
         const emailTemplates = require("./services/email-templates");
-        sendEmail(email, "Welcome to Ocean SFT 👋", emailTemplates.welcomeEmail(company, email)).catch(function(){});
+        sendEmail(email, "Welcome to Nexobiz360 👋", emailTemplates.welcomeEmail(company, email)).catch(function(){});
       }
       return json(res, 201, { ok: true, token, user: sanitizeUser(next) });
     } catch (error) {
@@ -618,9 +618,9 @@ sendEmail(
         const emailTemplates = require("./services/email-templates");
         sendEmail(
           targetUser.email,
-          "Your Password Was Changed - Ocean SFT",
+          "Your Password Was Changed - Nexobiz360",
           emailTemplates.wrapper(
-            '<p>Your Ocean SFT account password was just changed.</p>' +
+            '<p>Your Nexobiz360 account password was just changed.</p>' +
             '<p style="color:#64748b;font-size:13px;">If you did not make this change, please contact support immediately.</p>'
           )
         ).catch(function () {});
@@ -1278,7 +1278,7 @@ sendEmail(
           '</table><br/>' +
           emailTemplates.btn(approveUrl, 'Approve Free Trial') + '<br/><br/>' +
           emailTemplates.btn(rejectUrl, 'Reject Request');
-        sendEmail(adminEmail, "Free Trial Coupon Approval Request — Ocean SFT", emailTemplates.wrapper(detail)).catch(function(){});
+        sendEmail(adminEmail, "Free Trial Coupon Approval Request — Nexobiz360", emailTemplates.wrapper(detail)).catch(function(){});
       }
       ecoDb.close();
       return json(res, 201, { ok: true, approvalId });
@@ -1496,7 +1496,7 @@ sendEmail(
       // Notify the owner.
       const emailTemplates = require("./services/email-templates");
       const { sendEmail } = require("./services/notifications");
-      if (target.email) sendEmail(target.email, "Free Trial Granted — Ocean SFT", emailTemplates.wrapper('<p>An admin has granted you a <strong>' + (Number(body.months) || 1) + '-month free trial</strong> for: <strong>' + approvalRow.module_names + '</strong>. Your store & website are now live.</p>')).catch(function(){});
+      if (target.email) sendEmail(target.email, "Free Trial Granted — Nexobiz360", emailTemplates.wrapper('<p>An admin has granted you a <strong>' + (Number(body.months) || 1) + '-month free trial</strong> for: <strong>' + approvalRow.module_names + '</strong>. Your store & website are now live.</p>')).catch(function(){});
       return json(res, 201, { ok: true, approvalId, modules, months: Number(body.months) || 1, storeId: store.id || null });
     } catch (e) {
       console.error('Grant trial error:', e);
@@ -1530,7 +1530,7 @@ sendEmail(
       // 2) Alert the admin about the new pending payment
       const adminEmail = process.env.ADMIN_EMAIL || "";
       if (adminEmail) {
-        sendEmail(adminEmail, "New Store Registration Awaiting Approval — Ocean SFT",
+        sendEmail(adminEmail, "New Store Registration Awaiting Approval — Nexobiz360",
           emailTemplates.adminAlertEmail("New Payment Pending Approval",
             '<p>A new store payment needs your review.</p>' +
             '<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:14px;font-size:13px;color:#334155;">' +
@@ -1597,7 +1597,7 @@ sendEmail(
       // Email: renewal submission confirmation
       const emailTemplates = require("./services/email-templates");
       if (user.email) {
-        sendEmail(user.email, "Renewal Request Received — Ocean SFT", emailTemplates.wrapper(
+        sendEmail(user.email, "Renewal Request Received — Nexobiz360", emailTemplates.wrapper(
           '<p>Your subscription renewal request for <strong>' + months + ' month(s)</strong> has been received and is under review.</p>' +
           '<p style="margin-top:12px;color:#64748b;font-size:13px;">Payment ID: <strong>' + paymentId + '</strong></p>' +
           '<p style="margin-top:8px;color:#64748b;font-size:13px;">We will notify you once your renewal is approved.</p>'
@@ -1606,7 +1606,7 @@ sendEmail(
       // Email: admin alert
       const adminEmail = process.env.ADMIN_EMAIL || "";
       if (adminEmail) {
-        sendEmail(adminEmail, "Renewal Payment Pending — Ocean SFT",
+        sendEmail(adminEmail, "Renewal Payment Pending — Nexobiz360",
           emailTemplates.adminAlertEmail("Subscription Renewal Request",
             '<p>A user has submitted a subscription renewal payment.</p>' +
             '<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:14px;font-size:13px;color:#334155;">' +
@@ -1661,7 +1661,7 @@ sendEmail(
       var emailTemplates = require("./services/email-templates");
       var newExpiryDate = new Date(newExpiryMs).toLocaleDateString();
       if (mainUser.email) {
-        sendEmail(mainUser.email, "Subscription Renewed ✅ — Ocean SFT", emailTemplates.subscriptionRenewalConfirmedEmail(mainUser.company || mainUser.email, months, newExpiryDate)).catch(function(){});
+        sendEmail(mainUser.email, "Subscription Renewed ✅ — Nexobiz360", emailTemplates.subscriptionRenewalConfirmedEmail(mainUser.company || mainUser.email, months, newExpiryDate)).catch(function(){});
       }
 
       return json(res, 200, { ok: true, subscriptionExpiry: mainUser.subscriptionExpiry, months });
@@ -1696,7 +1696,7 @@ sendEmail(
       if (target.email) {
         var et2 = require("./services/email-templates");
         var exp2 = new Date(target.subscriptionExpiry).toLocaleDateString();
-        sendEmail(target.email, "Your Plan Has Been Updated - Ocean SFT",
+        sendEmail(target.email, "Your Plan Has Been Updated - Nexobiz360",
           et2.planUpdatedEmail(target.company || target.email, target.plan, exp2)).catch(function(){});
       }
 
@@ -1744,13 +1744,13 @@ sendEmail(
       if (mainUser && mainUser.email) {
         var emailTemplates = require("./services/email-templates");
         var expiryDate = mainUser.subscriptionExpiry ? new Date(mainUser.subscriptionExpiry).toLocaleDateString() : "N/A";
-        sendEmail(mainUser.email, "Subscription Activated — Ocean SFT", emailTemplates.subscriptionActivatedEmail(mainUser.company || mainUser.email, months, expiryDate, modules, moduleNames)).catch(function(){});
-        sendEmail(mainUser.email, "Payment Receipt & Invoice - Ocean SFT", emailTemplates.paymentReceiptEmail(mainUser.company || mainUser.email, paymentId, payment.amount, moduleNames && moduleNames[0], months, expiryDate, storeName, payment.bkash_number ? 'bKash' : '')).catch(function(){});
+        sendEmail(mainUser.email, "Subscription Activated — Nexobiz360", emailTemplates.subscriptionActivatedEmail(mainUser.company || mainUser.email, months, expiryDate, modules, moduleNames)).catch(function(){});
+        sendEmail(mainUser.email, "Payment Receipt & Invoice - Nexobiz360", emailTemplates.paymentReceiptEmail(mainUser.company || mainUser.email, paymentId, payment.amount, moduleNames && moduleNames[0], months, expiryDate, storeName, payment.bkash_number ? 'bKash' : '')).catch(function(){});
         // If this payment activated a store, also notify the owner that it is live
         if (payment.store_id) {
           var storeRow = (function(){ try { var d = require("./lib/ecosystem-db").getDb(); var r = d.prepare('SELECT name FROM stores WHERE id = ?').get(payment.store_id); d.close(); return r; } catch(err) { return null; } })();
           var storeName = storeRow ? storeRow.name : "";
-          sendEmail(mainUser.email, "Your Store is LIVE! - Ocean SFT", emailTemplates.storeLiveEmail(mainUser.company || mainUser.email, storeName)).catch(function(){});
+          sendEmail(mainUser.email, "Your Store is LIVE! - Nexobiz360", emailTemplates.storeLiveEmail(mainUser.company || mainUser.email, storeName)).catch(function(){});
         }
       }
 
@@ -2148,12 +2148,12 @@ const body = await parseBody(req);
       if (target.email) {
         const emailTemplates = require("./services/email-templates");
         if (typeof body.isAdmin === "boolean" && Boolean(body.isAdmin) !== prevAdmin) {
-          sendEmail(target.email, body.isAdmin ? "You are now an Ocean SFT Admin" : "Your Admin Access Has Been Removed",
+          sendEmail(target.email, body.isAdmin ? "You are now an Nexobiz360 Admin" : "Your Admin Access Has Been Removed",
             emailTemplates.accountRoleEmail(target.company || target.email, body.isAdmin ? "admin" : "user")).catch(function(){});
         }
         if (body.plan && body.plan !== prevPlan) {
           var expiryLabel = target.subscriptionExpiry ? new Date(target.subscriptionExpiry).toLocaleDateString() : "";
-          sendEmail(target.email, "Your Plan Has Been Updated - Ocean SFT",
+          sendEmail(target.email, "Your Plan Has Been Updated - Nexobiz360",
             emailTemplates.planUpdatedEmail(target.company || target.email, body.plan, expiryLabel)).catch(function(){});
         }
       }
@@ -2236,6 +2236,6 @@ server.on("error", function (e) {
 
 server.listen(PORT, () => {
   writeBootStatus("STARTED " + new Date().toISOString() + " (node " + process.version + ", sqlite: " + (ECO_SQLITE_DRIVER || "none") + ") on port " + PORT);
-  console.log("Ocean SFT server running on http://localhost:" + PORT);
+  console.log("Nexobiz360 server running on http://localhost:" + PORT);
 });
 
