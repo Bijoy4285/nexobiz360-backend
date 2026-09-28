@@ -1,4 +1,4 @@
-// Coupon system for Ocean SFT.
+// Coupon system for Nexobiz360.
 // - Daily rotating discount codes (10/15/20/25%) are derived deterministically
 //   from the date, so checkout + admin always agree without any manual entry.
 // - Founder trial codes (e.g. `minhazul-free`) grant a free trial month and are
