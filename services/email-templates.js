@@ -1,7 +1,7 @@
 ﻿//﻿ Nexobiz360 branded email templates
 // All emails include the app logo, name, and a consistent design.
 
-const APP_URL = process.env.APP_URL || "https://nexobiz360.weavestackit.online";
+const APP_URL = process.env.APP_URL || "https://weavestackit.online";
 const BRAND = {
   name: " Nexobiz360",
   tagline: "All-in-one business management",
