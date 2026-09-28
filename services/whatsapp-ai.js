@@ -99,7 +99,7 @@ function processIncomingMessage(db, message) {
   let action = null;
 
   if (text.match(/^(hi|hello|hey|salam|assalam)/)) {
-    reply = "Welcome to Ocean SFT! I'm your AI assistant. How can I help you today?\n\nType:\n• *menu* - View products/services\n• *order* - Place an order\n• *book* - Make a booking\n• *status* - Check order status\n• *help* - Get help";
+    reply = "Welcome to Nexobiz360! I'm your AI assistant. How can I help you today?\n\nType:\n• *menu* - View products/services\n• *order* - Place an order\n• *book* - Make a booking\n• *status* - Check order status\n• *help* - Get help";
   } else if (text.includes("menu") || text.includes("product")) {
     const stores = db.prepare ? null : null;
     reply = "Here are our available services:\n\n🍽️ Restaurant - View menu & order\n🏨 Hotel - Book rooms\n💊 Pharmacy - Order medicines\n🛒 Store - Browse products\n\nReply with a service name to get started!";
