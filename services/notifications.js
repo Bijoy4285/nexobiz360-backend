@@ -33,7 +33,7 @@ async function sendGmail(to, subject, htmlBody) {
   }
   try {
     const info = await transporter.sendMail({
-      from: GMAIL_FROM ? (GMAIL_FROM + "").includes("@") ? { name: (process.env.GMAIL_NAME || "Ocean SFT"), address: GMAIL_FROM } : { name: GMAIL_FROM, address: GMAIL_USER } : GMAIL_USER,
+      from: GMAIL_FROM ? (GMAIL_FROM + "").includes("@") ? { name: (process.env.GMAIL_NAME || "Nexobiz360"), address: GMAIL_FROM } : { name: GMAIL_FROM, address: GMAIL_USER } : GMAIL_USER,
       to: to,
       subject: subject,
       html: htmlBody
@@ -58,7 +58,8 @@ async function sendEmail(to, subject, htmlBody) {
   return new Promise((resolve) => {
     const payload = JSON.stringify({
       personalizations: [{ to: [{ email: to }] }],
-      from: { email: process.env.FROM_EMAIL || "noreply@oceansft.com", name: "Nexobiz360" },
+      from: { email: process.env.FROM_EMAIL || "noreply@nexobiz360.weavestackit.online"
+, name: "Nexobiz360" },
       subject,
       content: [{ type: "text/html", value: htmlBody }]
     });
