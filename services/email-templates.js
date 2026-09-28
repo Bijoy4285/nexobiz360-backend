@@ -443,7 +443,7 @@ module.exports = {
    paymentDueEmail, membershipWelcomeEmail, paymentReceiptEmail, accountRoleEmail, planUpdatedEmail,
   passwordResetEmail, passwordChangedEmail
 };
- branded email templates
+// Nexobiz360 branded email templates
 // All emails include the app logo, name, and a consistent design.
 
 const APP_URL = process.env.APP_URL || "https://nexobiz360.weavestackit.online";
