@@ -307,7 +307,7 @@ function handleEcosystem(req, res, user) {
       try {
         var et = require('./email-templates');
         var storeName = String(msStore.name || '');
-        sendEmail(msEmail, 'You are now a member of ' + storeName + ' - Ocean SFT',
+        sendEmail(msEmail, 'You are now a member of ' + storeName + ' -Nexobiz360',
           et.membershipWelcomeEmail(String(body.name || msEmail), storeName, msPlanLabel, msExpiry, msCode, msPrice)).catch(function(){});
       } catch(e) {}
       return json(res, 200, { ok: true, id: msId2, member_code: msCode });
