@@ -562,8 +562,8 @@ if (urlPath === "/api/auth/logout" && req.method === "POST") {
         const rawToken = createPasswordResetToken(db, found.id);
         writeDb(db);
 
-        const baseUrl = (req.headers["x-forwarded-proto"] || "https") + "://" + (req.headers.host || "weavestackit.online");
-        const resetUrl = baseUrl + "/reset-password?token=" + rawToken;
+        const baseUrl = "https://nexobiz360.weavestackit.online";
+const resetUrl = baseUrl + "/reset-password.html?token=" + rawToken;
         const emailTemplates = require("./services/email-templates");
 sendEmail(
   found.email,
