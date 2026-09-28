@@ -1,20 +1,20 @@
 // Coupon system for Nexobiz360.
 // - Daily rotating discount codes (10/15/20/25%) are derived deterministically
 //   from the date, so checkout + admin always agree without any manual entry.
-// - Founder trial codes (e.g. `minhazul-free`) grant a free trial month and are
+// - Founder trial codes (e.g. `rabbi-free`) grant a free trial month and are
 //   approved by the admin via an email button link.
 
 var DAILY_TIERS = [
-  { pct: 10, prefix: 'OCEAN10' },
-  { pct: 15, prefix: 'OCEAN15' },
-  { pct: 20, prefix: 'OCEAN20' },
-  { pct: 25, prefix: 'OCEAN25' }
+  { pct: 10, prefix: 'Nexobiz10' },
+  { pct: 15, prefix: 'Nexobiz15' },
+  { pct: 20, prefix: 'Nexobiz20' },
+  { pct: 25, prefix: 'Nexobiz25' }
 ];
 
 // Founder / free-trial codes. Extend this list to add more.
 var TRIAL_CODES = [
-  { code: 'minhazul-trial', months: 1, founder: 'minhazul', label: 'Free 1 Month (Founder)' },
-  { code: 'minhazul-free', months: 1, founder: 'minhazul', label: 'Free 1 Month (Founder)' }
+  { code: 'rabbi-trial', months: 1, founder: 'rabbi', label: 'Free 1 Month (Founder)' },
+  { code: 'rabbi-free', months: 1, founder: 'rabbi', label: 'Free 1 Month (Founder)' }
 ];
 
 function dateKey(d) {
@@ -28,7 +28,7 @@ function dateKey(d) {
 // Deterministic short token derived from the date so the same code is shown
 // consistently in checkout and admin for a given day.
 function dayToken(dateStr) {
-  var seed = 'OCEAN-SFT-' + dateStr;
+  var seed = 'Nexobiz-SFT-' + dateStr;
   var h = 7;
   for (var i = 0; i < seed.length; i++) {
     h = (h * 31 + seed.charCodeAt(i)) >>> 0;
