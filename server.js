@@ -834,7 +834,7 @@ if (urlPath === "/api/pharmacy/upload" && req.method === "POST") {
     return;
   }
 
-  if (urlPath === "/api/gym/upload" && req.method === "POST") {
+ if (urlPath === "/api/gym/upload" && req.method === "POST") {
     if (!user) return json(res, 401, { error: "Unauthorized" });
     try {
       const body = await parseBody(req);
@@ -847,35 +847,12 @@ if (urlPath === "/api/pharmacy/upload" && req.method === "POST") {
       if (!dataUrl || !dataUrl.startsWith("data:")) {
         return json(res, 400, { error: "Invalid upload payload." });
       }
-      const allowed = {
-        "image/png": { ext: "png", mime: "image/png", kind: "image" },
-        "image/jpeg": { ext: "jpg", mime: "image/jpeg", kind: "image" },
-        "image/gif": { ext: "gif", mime: "image/gif", kind: "image" },
-        "application/pdf": { ext: "pdf", mime: "application/pdf", kind: "doc" },
-        "application/msword": { ext: "doc", mime: "application/msword", kind: "doc" },
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": { ext: "docx", mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", kind: "doc" },
-        "application/vnd.ms-excel": { ext: "xls", mime: "application/vnd.ms-excel", kind: "sheet" },
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": { ext: "xlsx", mime: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", kind: "sheet" },
-        "text/csv": { ext: "csv", mime: "text/csv", kind: "sheet" },
-        "text/plain": { ext: "txt", mime: "text/plain", kind: "doc" }
-      };
-      const match = dataUrl.match(/^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$/);
-      if (!match || !allowed[match[1]]) {
-        return json(res, 400, { error: "Unsupported file type." });
-      }
-      const meta = allowed[match[1]];
-      const ext = meta.ext;
-      const b64 = match[2];
-      if (b64.length > 10 * 1024 * 1024) return json(res, 413, { error: "File too large (max 10MB)." });
-      const uploadsRoot = path.join(ROOT, "uploads", "gym", String(user.id));
-      const recordDir = path.join(uploadsRoot, recordType, recordId || "general");
-      fs.mkdirSync(recordDir, { recursive: true });
-      const ts = Date.now() + "_" + Math.random().toString(36).slice(2, 8);
-      const safeFile = ts + "." + ext;
-      const absPath = path.join(recordDir, safeFile);
-      const relPath = path.join(String(user.id), recordType, recordId || "general", safeFile).replace(/\\/g, "/");
+      const isImage = dataUrl.startsWith("data:image");
+      const uploadResult = await cloudinary.uploader.upload(dataUrl, {
+        folder: "nexobiz360/gym/" + user.id + "/" + recordType + "/" + (recordId || "general"),
+        resource_type: isImage ? "image" : "raw"
+      });
       const docId = "gymdoc_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
-      fs.writeFileSync(absPath, Buffer.from(b64, "base64"));
       if (!Array.isArray(db.gym_docs)) db.gym_docs = [];
       db.gym_docs.push({
         id: docId,
@@ -884,22 +861,19 @@ if (urlPath === "/api/pharmacy/upload" && req.method === "POST") {
         recordId: recordId || "general",
         title,
         category,
-        filename: safeFile,
-        mime: meta.mime,
-        kind: meta.kind,
-        url: "/api/gym/doc/" + relPath,
+        url: uploadResult.secure_url,
+        cloudinaryId: uploadResult.public_id,
         note,
-        ext,
-        size: Buffer.byteLength(b64, "base64"),
+        size: uploadResult.bytes,
         createdAt: new Date().toISOString()
       });
       writeDb(db);
-      return json(res, 201, { ok: true, id: docId, url: "/api/gym/doc/" + relPath });
+      return json(res, 201, { ok: true, id: docId, url: uploadResult.secure_url });
     } catch (err) {
+      console.error("Cloudinary upload error:", err);
       return json(res, 500, { error: "Upload failed." });
     }
   }
-
   if (urlPath === "/api/gym/docs" && req.method === "GET") {
     if (!user) return json(res, 401, { error: "Unauthorized" });
     const parsed = new URL(urlPath + req.url.replace(urlPath, ""), "http://x");
