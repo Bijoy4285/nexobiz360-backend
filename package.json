@@ -11,7 +11,8 @@
     "dotenv": "^17.4.2",
     "nodemailer": "^9.0.5",
     "qrcode": "^1.5.4",
-    "mongodb": "^6.10.0"
+    "mongodb": "^6.10.0",
+    "cloudinary": "^2.5.1"
   },
   "optionalDependencies": {
     "better-sqlite3": "^13.0.1"
