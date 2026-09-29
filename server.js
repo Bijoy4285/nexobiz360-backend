@@ -740,8 +740,7 @@ sendEmail(
       return json(res, 400, { error: "Invalid storage payload." });
     }
   }
-
-  if (urlPath === "/api/pharmacy/upload" && req.method === "POST") {
+if (urlPath === "/api/pharmacy/upload" && req.method === "POST") {
     if (!user) return json(res, 401, { error: "Unauthorized" });
     try {
       const body = await parseBody(req);
@@ -752,39 +751,27 @@ sendEmail(
       if (!dataUrl || !dataUrl.startsWith("data:image") || recordId.length < 1) {
         return json(res, 400, { error: "Invalid upload payload." });
       }
-      const allowed = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif" };
-      const match = dataUrl.match(/^data:(image\/[a-z]+);base64,([A-Za-z0-9+/=]+)$/);
-      if (!match || !allowed[match[1]]) {
-        return json(res, 400, { error: "Unsupported image type." });
-      }
-      const ext = allowed[match[1]];
-      const b64 = match[2];
-      if (b64.length > 2 * 1024 * 1024) return json(res, 413, { error: "File too large." });
-      const uploadsRoot = path.join(ROOT, "uploads", "pharmacy", String(user.id));
-      const recordDir = path.join(uploadsRoot, recordType, recordId);
-      fs.mkdirSync(recordDir, { recursive: true });
-       const ts = Date.now() + "_" + Math.random().toString(36).slice(2, 8);
-       const safeFile = ts + "." + ext;
-       const absPath = path.join(recordDir, safeFile);
-       const relPath = path.join(String(user.id), recordType, recordId, safeFile).replace(/\\/g, "/");
-       const docId = "phdoc_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
-       fs.writeFileSync(absPath, Buffer.from(b64, "base64"));
-       if (!Array.isArray(db.pharmacy_docs)) db.pharmacy_docs = [];
-       db.pharmacy_docs.push({
-         id: docId,
-         user: user.id,
-         recordType,
-         recordId,
-         filename: safeFile,
-         url: "/api/pharmacy/doc/" + relPath,
-         note,
-         ext,
-         size: Buffer.byteLength(b64, "base64"),
-         createdAt: new Date().toISOString()
-       });
-       writeDb(db);
-       return json(res, 201, { ok: true, id: docId, url: "/api/pharmacy/doc/" + relPath });
+      const uploadResult = await cloudinary.uploader.upload(dataUrl, {
+        folder: "nexobiz360/pharmacy/" + user.id + "/" + recordType + "/" + recordId,
+        resource_type: "image"
+      });
+      const docId = "phdoc_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+      if (!Array.isArray(db.pharmacy_docs)) db.pharmacy_docs = [];
+      db.pharmacy_docs.push({
+        id: docId,
+        user: user.id,
+        recordType,
+        recordId,
+        url: uploadResult.secure_url,
+        cloudinaryId: uploadResult.public_id,
+        note,
+        size: uploadResult.bytes,
+        createdAt: new Date().toISOString()
+      });
+      writeDb(db);
+      return json(res, 201, { ok: true, id: docId, url: uploadResult.secure_url });
     } catch (err) {
+      console.error("Cloudinary upload error:", err);
       return json(res, 500, { error: "Upload failed." });
     }
   }
