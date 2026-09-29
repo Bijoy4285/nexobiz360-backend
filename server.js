@@ -197,12 +197,12 @@ async function bootDb() {
   initEcosystemDb();
   migrateLegacyData();
 
-  // Backup every 5 minutes so recent store data is never lost.
-  setInterval(function () {
+  // Backup every 20 minutes so recent store data is never lost.
+ setInterval(function () {
     backupAllDbFiles().catch(function (e) {
       console.error("[sqlite-cloud-sync] periodic backup failed:", e.message);
     });
-  }, 5 * 60 * 1000);
+  }, 20 * 60 * 1000); // 5 min থেকে 20 min করা হয়েছে - bandwidth বাঁচানোর জন্য
 
   // Backup immediately when Render sends a shutdown signal
   // (this happens right before every redeploy/restart/sleep).
