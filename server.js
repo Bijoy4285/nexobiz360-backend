@@ -292,11 +292,15 @@ const requested = req.url === "/" ? "/index.html" : req.url;
     ".woff2": "font/woff2"
   };
 
-  const headers = { "Content-Type": types[ext] || "application/octet-stream" };
+ const headers = { "Content-Type": types[ext] || "application/octet-stream" };
   if (ext === ".html") {
     headers["Cache-Control"] = "no-store, no-cache, must-revalidate, proxy-revalidate";
     headers["Pragma"] = "no-cache";
     headers["Expires"] = "0";
+  } else if ([".png", ".jpg", ".jpeg", ".svg", ".ico", ".woff", ".woff2"].includes(ext)) {
+    headers["Cache-Control"] = "public, max-age=604800";
+  } else if ([".js", ".css"].includes(ext)) {
+    headers["Cache-Control"] = "public, max-age=3600";
   }
   res.writeHead(200, headers);
   fs.createReadStream(filePath).pipe(res);
@@ -467,14 +471,14 @@ const server = http.createServer(async (req, res) => {
 res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
-  res.setHeader("Pragma", "no-cache");
-  res.setHeader("Expires", "0");
-  res.setHeader("ETag", '"' + Date.now() + '"');
   if (req.method === "OPTIONS") return json(res, 200, { ok: true });
 
   const urlPath = req.url.split("?")[0];
 
+  if (urlPath.startsWith('/api/')) {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+  }
   try {
   const db = readDb();
   const user = getSessionUser(db, req);
