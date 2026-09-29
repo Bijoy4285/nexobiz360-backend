@@ -6,11 +6,7 @@ const path = require("path");
 
 try { require("dotenv").config(); } catch (e) {}
 const cloudinary = require('cloudinary').v2;
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET
-});
+cloudinary.config({ secure: true });
 const PORT = Number(process.env.PORT || 3000);
 const ROOT = path.resolve(__dirname, "..");
 const BOOT_STATUS_FILE = path.join(ROOT, "backend-status.txt");
