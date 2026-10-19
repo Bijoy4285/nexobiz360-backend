@@ -179,16 +179,34 @@ function handleEcosystem(req, res, user) {
     try { ownerDb.close(); } catch(e){}
     return { review_count: stats.cnt, avg_rating: Math.round(stats.avg * 10) / 10 };
   }
-  function findGymStore(storeId) {
+    function findGymStore(storeId) {
     if (!db) return null;
     if (storeId) return getStore(storeId);
     try { return db.prepare('SELECT * FROM reg.stores WHERE type = ? AND is_active = 1 ORDER BY created_at LIMIT 1').get('gym') || null; } catch(e){ return null; }
   }
+
+  // ---- Advanced Inventory helper (stock +/- with history log) --------
+  function adjustStock(storeId, itemId, qtyChange, changeType, opts) {
+    opts = opts || {};
+    var item = db.prepare('SELECT * FROM menu_items WHERE id = ? AND store_id = ?').get(itemId, storeId);
+    if (!item) return null;
+    var rawStock = Number(item.stock_qty);
+    if (isNaN(rawStock)) rawStock = -1;
+    var qtyBefore = rawStock < 0 ? 0 : rawStock;
+    var qtyAfter = qtyBefore + qtyChange;
+    if (qtyAfter < 0) {
+      if (!opts.allowNegative) return { error: 'insufficient_stock', available: qtyBefore };
+      qtyAfter = 0;
+    }
+    db.prepare('UPDATE menu_items SET stock_qty = ? WHERE id = ?').run(qtyAfter, itemId);
+    var historyId = 'ih_' + generateId();
+    db.prepare('INSERT INTO inventory_history (id, store_id, item_id, item_name, change_type, qty_change, qty_before, qty_after, ref_type, ref_id, created_by, reason, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))')
+      .run(historyId, storeId, itemId, item.name, changeType, qtyChange, qtyBefore, qtyAfter, opts.refType || '', opts.refId || '', opts.createdBy || '', opts.reason || '');
+    return { item_id: itemId, item_name: item.name, qty_before: qtyBefore, qty_after: qtyAfter, qty_change: qtyChange, history_id: historyId, was_untracked: rawStock < 0 };
+  }
   // ----------------------------------------------------------------
 
   return parseBody(req).catch(function() { return {}; }).then(function(body) {
-    // Always have a connection (public users get a throwaway 'public' file).
-    db = openUdb(ownerId(user) || 'public');
 
     // ============ USER MODULES ============
     if (urlPath === '/api/ecosystem/user-modules' && method === 'GET') {
@@ -1781,7 +1799,630 @@ if (type) {
         return aiResponse('reply', Object.assign(out, { engine: 'heuristic' }));
       }
     }
+    // ============ ADVANCED INVENTORY (Restaurant) ============
+    var actorName = (user && (user.name || user.email)) || 'owner';
+    var invQuery = new URL(req.url, 'http://localhost').searchParams;
+    function qStoreId() { return body.store_id || invQuery.get('store_id') || ''; }
+    var m;
 
+    // ---------- 1) STOCK ADJUSTMENTS ----------
+    if (method === 'POST' && (m = urlPath.match(/^\/api\/ecosystem\/stores\/([^/]+)\/stock-adjustments$/))) {
+      var saStoreId = m[1];
+      var saStore = switchToStoreOwner(saStoreId);
+      if (!saStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, saStore)) return null;
+      var saItemId = String(body.item_id || '');
+      var saQtyChange = Number(body.qty_change);
+      if (!saItemId || !isFinite(saQtyChange) || saQtyChange === 0) {
+        return json(res, 400, { error: 'item_id and non-zero qty_change are required.' });
+      }
+      var saResult = adjustStock(saStoreId, saItemId, saQtyChange, 'manual_adjustment', {
+        reason: String(body.reason || ''), createdBy: actorName, refType: 'stock_adjustment'
+      });
+      if (!saResult) return json(res, 404, { error: 'Item not found.' });
+      if (saResult.error) return json(res, 400, { error: saResult.error, available: saResult.available });
+      var saId = 'sa_' + generateId();
+      db.prepare('INSERT INTO stock_adjustments (id, store_id, item_id, item_name, qty_change, reason, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))')
+        .run(saId, saStoreId, saItemId, saResult.item_name, saQtyChange, String(body.reason || ''), actorName);
+      return json(res, 200, { id: saId, result: saResult });
+    }
+
+    if (method === 'GET' && (m = urlPath.match(/^\/api\/ecosystem\/stores\/([^/]+)\/stock-adjustments$/))) {
+      var saListStoreId = m[1];
+      var saListStore = switchToStoreOwner(saListStoreId);
+      if (!saListStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, saListStore)) return null;
+      var saRows = db.prepare('SELECT * FROM stock_adjustments WHERE store_id = ? ORDER BY created_at DESC LIMIT 200').all(saListStoreId);
+      return json(res, 200, { adjustments: saRows });
+    }
+
+    if (method === 'GET' && (m = urlPath.match(/^\/api\/ecosystem\/stores\/([^/]+)\/inventory-history$/))) {
+      var ihStoreId = m[1];
+      var ihStore = switchToStoreOwner(ihStoreId);
+      if (!ihStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, ihStore)) return null;
+      var ihItemId = invQuery.get('item_id') || '';
+      var ihRows = ihItemId
+        ? db.prepare('SELECT * FROM inventory_history WHERE store_id = ? AND item_id = ? ORDER BY created_at DESC LIMIT 300').all(ihStoreId, ihItemId)
+        : db.prepare('SELECT * FROM inventory_history WHERE store_id = ? ORDER BY created_at DESC LIMIT 300').all(ihStoreId);
+      return json(res, 200, { history: ihRows });
+    }
+
+    if (method === 'GET' && (m = urlPath.match(/^\/api\/ecosystem\/stores\/([^/]+)\/low-stock$/))) {
+      var lsStoreId = m[1];
+      var lsStore = switchToStoreOwner(lsStoreId);
+      if (!lsStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, lsStore)) return null;
+      var lsThreshold = Number(invQuery.get('threshold')) || 5;
+      var lsRows = db.prepare('SELECT * FROM menu_items WHERE store_id = ? AND stock_qty >= 0 AND stock_qty <= ? ORDER BY stock_qty ASC').all(lsStoreId, lsThreshold);
+      return json(res, 200, { items: lsRows, threshold: lsThreshold });
+    }
+
+    // ---------- 2) PURCHASE ORDERS ----------
+    if (method === 'POST' && (m = urlPath.match(/^\/api\/ecosystem\/stores\/([^/]+)\/purchase-orders$/))) {
+      var poStoreId = m[1];
+      var poStore = switchToStoreOwner(poStoreId);
+      if (!poStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, poStore)) return null;
+      var poItemsIn = Array.isArray(body.items) ? body.items : [];
+      if (!poItemsIn.length) return json(res, 400, { error: 'At least one item is required.' });
+      var poId = 'po_' + generateId();
+      var poTotal = 0;
+      poItemsIn.forEach(function(it) { poTotal += (Number(it.qty_ordered) || 0) * (Number(it.unit_cost) || 0); });
+      db.prepare('INSERT INTO purchase_orders (id, store_id, supplier_name, supplier_phone, status, notes, total_cost, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))')
+        .run(poId, poStoreId, String(body.supplier_name || ''), String(body.supplier_phone || ''), 'draft', String(body.notes || ''), poTotal, actorName);
+      poItemsIn.forEach(function(it) {
+        db.prepare('INSERT INTO purchase_order_items (id, po_id, item_id, item_name, qty_ordered, qty_received, unit_cost) VALUES (?, ?, ?, ?, ?, 0, ?)')
+          .run('poi_' + generateId(), poId, String(it.item_id || ''), String(it.item_name || ''), Number(it.qty_ordered) || 0, Number(it.unit_cost) || 0);
+      });
+      return json(res, 200, {
+        purchase_order: db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(poId),
+        items: db.prepare('SELECT * FROM purchase_order_items WHERE po_id = ?').all(poId)
+      });
+    }
+
+    if (method === 'GET' && (m = urlPath.match(/^\/api\/ecosystem\/stores\/([^/]+)\/purchase-orders$/))) {
+      var poListStoreId = m[1];
+      var poListStore = switchToStoreOwner(poListStoreId);
+      if (!poListStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, poListStore)) return null;
+      var poStatusFilter = invQuery.get('status') || '';
+      var poRows = poStatusFilter
+        ? db.prepare('SELECT * FROM purchase_orders WHERE store_id = ? AND status = ? ORDER BY created_at DESC').all(poListStoreId, poStatusFilter)
+        : db.prepare('SELECT * FROM purchase_orders WHERE store_id = ? ORDER BY created_at DESC').all(poListStoreId);
+      return json(res, 200, { purchase_orders: poRows });
+    }
+
+    if (method === 'GET' && (m = urlPath.match(/^\/api\/ecosystem\/purchase-orders\/([^/]+)$/))) {
+      var poGetId = m[1];
+      var poGetStoreId = qStoreId();
+      var poGetStore = switchToStoreOwner(poGetStoreId);
+      if (!poGetStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, poGetStore)) return null;
+      var poGet = db.prepare('SELECT * FROM purchase_orders WHERE id = ? AND store_id = ?').get(poGetId, poGetStoreId);
+      if (!poGet) return json(res, 404, { error: 'Purchase order not found.' });
+      return json(res, 200, { purchase_order: poGet, items: db.prepare('SELECT * FROM purchase_order_items WHERE po_id = ?').all(poGetId) });
+    }
+
+    if (method === 'PATCH' && (m = urlPath.match(/^\/api\/ecosystem\/purchase-orders\/([^/]+)$/))) {
+      var poPatchId = m[1];
+      var poPatchStoreId = qStoreId();
+      var poPatchStore = switchToStoreOwner(poPatchStoreId);
+      if (!poPatchStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, poPatchStore)) return null;
+      var poPatchRow = db.prepare('SELECT * FROM purchase_orders WHERE id = ? AND store_id = ?').get(poPatchId, poPatchStoreId);
+      if (!poPatchRow) return json(res, 404, { error: 'Purchase order not found.' });
+      if (poPatchRow.status === 'received' || poPatchRow.status === 'cancelled') {
+        return json(res, 400, { error: 'Cannot edit a ' + poPatchRow.status + ' purchase order.' });
+      }
+      db.prepare('UPDATE purchase_orders SET status = ?, notes = ?, supplier_name = ?, supplier_phone = ? WHERE id = ?').run(
+        body.status != null ? String(body.status) : poPatchRow.status,
+        body.notes != null ? String(body.notes) : poPatchRow.notes,
+        body.supplier_name != null ? String(body.supplier_name) : poPatchRow.supplier_name,
+        body.supplier_phone != null ? String(body.supplier_phone) : poPatchRow.supplier_phone,
+        poPatchId
+      );
+      return json(res, 200, { purchase_order: db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(poPatchId) });
+    }
+
+    if (method === 'POST' && (m = urlPath.match(/^\/api\/ecosystem\/purchase-orders\/([^/]+)\/receive$/))) {
+      var poRecvId = m[1];
+      var poRecvStoreId = qStoreId();
+      var poRecvStore = switchToStoreOwner(poRecvStoreId);
+      if (!poRecvStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, poRecvStore)) return null;
+      var poRecvRow = db.prepare('SELECT * FROM purchase_orders WHERE id = ? AND store_id = ?').get(poRecvId, poRecvStoreId);
+      if (!poRecvRow) return json(res, 404, { error: 'Purchase order not found.' });
+      if (poRecvRow.status === 'received' || poRecvRow.status === 'cancelled') {
+        return json(res, 400, { error: 'This purchase order is already ' + poRecvRow.status + '.' });
+      }
+      var poRecvItems = db.prepare('SELECT * FROM purchase_order_items WHERE po_id = ?').all(poRecvId);
+      var poRecvOverride = Array.isArray(body.items) ? body.items : null;
+      var poFindOverride = function(itemId) {
+        if (!poRecvOverride) return null;
+        for (var i = 0; i < poRecvOverride.length; i++) { if (poRecvOverride[i].item_id === itemId) return poRecvOverride[i]; }
+        return null;
+      };
+      poRecvItems.forEach(function(poi) {
+        var ov = poFindOverride(poi.item_id);
+        var qtyToReceive = ov ? Number(ov.qty_received) || 0 : (Number(poi.qty_ordered) - Number(poi.qty_received));
+        if (qtyToReceive > 0) {
+          adjustStock(poRecvStoreId, poi.item_id, qtyToReceive, 'purchase_receive', {
+            refType: 'purchase_order', refId: poRecvId, createdBy: actorName, allowNegative: true
+          });
+          if (poi.unit_cost > 0) {
+            db.prepare('UPDATE menu_items SET cost_price = ? WHERE id = ? AND store_id = ?').run(poi.unit_cost, poi.item_id, poRecvStoreId);
+          }
+          db.prepare('UPDATE purchase_order_items SET qty_received = qty_received + ? WHERE id = ?').run(qtyToReceive, poi.id);
+        }
+      });
+      var poRecvItemsAfter = db.prepare('SELECT * FROM purchase_order_items WHERE po_id = ?').all(poRecvId);
+      var poAllReceived = true;
+      poRecvItemsAfter.forEach(function(poi) { if (Number(poi.qty_received) < Number(poi.qty_ordered)) poAllReceived = false; });
+      db.prepare('UPDATE purchase_orders SET status = ?, received_at = datetime(\'now\') WHERE id = ?').run(poAllReceived ? 'received' : 'partial', poRecvId);
+      return json(res, 200, { purchase_order: db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(poRecvId), items: poRecvItemsAfter });
+    }
+
+    // ---------- 3) TRANSFER ORDERS ----------
+    if (method === 'POST' && urlPath === '/api/ecosystem/transfer-orders') {
+      var toFromId = String(body.from_store_id || '');
+      var toToId = String(body.to_store_id || '');
+      if (!toFromId || !toToId || toFromId === toToId) {
+        return json(res, 400, { error: 'from_store_id and a different to_store_id are required.' });
+      }
+      var toFromStore = switchToStoreOwner(toFromId);
+      if (!toFromStore) return json(res, 404, { error: 'Source store not found.' });
+      if (requireStoreOwner(res, user, toFromStore)) return null;
+      var toToStoreMeta = getStore(toToId);
+      if (!toToStoreMeta) return json(res, 404, { error: 'Destination store not found.' });
+      if (String(toToStoreMeta.owner_id || '') !== String(toFromStore.owner_id || '')) {
+        return json(res, 400, { error: 'Transfers are only allowed between your own stores.' });
+      }
+      var toItemsIn = Array.isArray(body.items) ? body.items : [];
+      if (!toItemsIn.length) return json(res, 400, { error: 'At least one item is required.' });
+      var toId = 'to_' + generateId();
+      db.prepare('INSERT INTO transfer_orders (id, from_store_id, to_store_id, status, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime(\'now\'))')
+        .run(toId, toFromId, toToId, 'pending', String(body.note || ''), actorName);
+      toItemsIn.forEach(function(it) {
+        db.prepare('INSERT INTO transfer_order_items (id, transfer_id, item_id, item_name, qty, unit_cost) VALUES (?, ?, ?, ?, ?, ?)')
+          .run('toi_' + generateId(), toId, String(it.item_id || ''), String(it.item_name || ''), Number(it.qty) || 0, Number(it.unit_cost) || 0);
+      });
+      return json(res, 200, {
+        transfer_order: db.prepare('SELECT * FROM transfer_orders WHERE id = ?').get(toId),
+        items: db.prepare('SELECT * FROM transfer_order_items WHERE transfer_id = ?').all(toId)
+      });
+    }
+
+    if (method === 'GET' && (m = urlPath.match(/^\/api\/ecosystem\/stores\/([^/]+)\/transfer-orders$/))) {
+      var toListStoreId = m[1];
+      var toListStore = switchToStoreOwner(toListStoreId);
+      if (!toListStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, toListStore)) return null;
+      var toRows = db.prepare('SELECT * FROM transfer_orders WHERE from_store_id = ? OR to_store_id = ? ORDER BY created_at DESC').all(toListStoreId, toListStoreId);
+      return json(res, 200, { transfer_orders: toRows });
+    }
+
+    if (method === 'POST' && (m = urlPath.match(/^\/api\/ecosystem\/transfer-orders\/([^/]+)\/dispatch$/))) {
+      var toDispId = m[1];
+      var toDispStoreId = qStoreId();
+      var toDispStore = switchToStoreOwner(toDispStoreId);
+      if (!toDispStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, toDispStore)) return null;
+      var toDispRow = db.prepare('SELECT * FROM transfer_orders WHERE id = ?').get(toDispId);
+      if (!toDispRow || toDispRow.from_store_id !== toDispStoreId) return json(res, 404, { error: 'Transfer order not found.' });
+      if (toDispRow.status !== 'pending') return json(res, 400, { error: 'Only pending transfers can be dispatched.' });
+      var toDispItems = db.prepare('SELECT * FROM transfer_order_items WHERE transfer_id = ?').all(toDispId);
+      for (var di = 0; di < toDispItems.length; di++) {
+        var srcItem = db.prepare('SELECT * FROM menu_items WHERE id = ? AND store_id = ?').get(toDispItems[di].item_id, toDispStoreId);
+        var srcAvail = srcItem && Number(srcItem.stock_qty) >= 0 ? Number(srcItem.stock_qty) : 0;
+        if (!srcItem || srcAvail < Number(toDispItems[di].qty)) {
+          return json(res, 400, { error: 'Insufficient stock for item: ' + toDispItems[di].item_name, available: srcAvail });
+        }
+      }
+      toDispItems.forEach(function(it) {
+        adjustStock(toDispStoreId, it.item_id, -Number(it.qty), 'transfer_dispatch', { refType: 'transfer_order', refId: toDispId, createdBy: actorName });
+      });
+      db.prepare('UPDATE transfer_orders SET status = ?, dispatched_at = datetime(\'now\') WHERE id = ?').run('in_transit', toDispId);
+      return json(res, 200, { transfer_order: db.prepare('SELECT * FROM transfer_orders WHERE id = ?').get(toDispId) });
+    }
+
+    if (method === 'POST' && (m = urlPath.match(/^\/api\/ecosystem\/transfer-orders\/([^/]+)\/receive$/))) {
+      var toRecvId = m[1];
+      var toRecvStoreId = qStoreId();
+      var toRecvStore = switchToStoreOwner(toRecvStoreId);
+      if (!toRecvStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, toRecvStore)) return null;
+      var toRecvRow = db.prepare('SELECT * FROM transfer_orders WHERE id = ?').get(toRecvId);
+      if (!toRecvRow || toRecvRow.to_store_id !== toRecvStoreId) return json(res, 404, { error: 'Transfer order not found.' });
+      if (toRecvRow.status !== 'in_transit') return json(res, 400, { error: 'Only in-transit transfers can be received.' });
+      var toRecvItems = db.prepare('SELECT * FROM transfer_order_items WHERE transfer_id = ?').all(toRecvId);
+      var toRecvNotes = [];
+      toRecvItems.forEach(function(it) {
+        var destItem = db.prepare('SELECT * FROM menu_items WHERE store_id = ? AND lower(name) = lower(?)').get(toRecvStoreId, it.item_name);
+        if (destItem) {
+          adjustStock(toRecvStoreId, destItem.id, Number(it.qty), 'transfer_receive', { refType: 'transfer_order', refId: toRecvId, createdBy: actorName, allowNegative: true });
+        } else {
+          toRecvNotes.push('No matching item named "' + it.item_name + '" in destination store — add it manually and adjust stock.');
+        }
+      });
+      db.prepare('UPDATE transfer_orders SET status = ?, received_at = datetime(\'now\') WHERE id = ?').run('received', toRecvId);
+      return json(res, 200, { transfer_order: db.prepare('SELECT * FROM transfer_orders WHERE id = ?').get(toRecvId), warnings: toRecvNotes });
+    }
+
+    if (method === 'POST' && (m = urlPath.match(/^\/api\/ecosystem\/transfer-orders\/([^/]+)\/cancel$/))) {
+      var toCancelId = m[1];
+      var toCancelStoreId = qStoreId();
+      var toCancelStore = switchToStoreOwner(toCancelStoreId);
+      if (!toCancelStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, toCancelStore)) return null;
+      var toCancelRow = db.prepare('SELECT * FROM transfer_orders WHERE id = ?').get(toCancelId);
+      if (!toCancelRow) return json(res, 404, { error: 'Transfer order not found.' });
+      if (toCancelRow.status !== 'pending') return json(res, 400, { error: 'Only pending transfers can be cancelled.' });
+      db.prepare('UPDATE transfer_orders SET status = ? WHERE id = ?').run('cancelled', toCancelId);
+      return json(res, 200, { transfer_order: db.prepare('SELECT * FROM transfer_orders WHERE id = ?').get(toCancelId) });
+    }
+
+    // ---------- 4) INVENTORY COUNTS ----------
+    if (method === 'POST' && (m = urlPath.match(/^\/api\/ecosystem\/stores\/([^/]+)\/inventory-counts$/))) {
+      var icStoreId = m[1];
+      var icStore = switchToStoreOwner(icStoreId);
+      if (!icStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, icStore)) return null;
+      var icId = 'ic_' + generateId();
+      db.prepare('INSERT INTO inventory_counts (id, store_id, status, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, datetime(\'now\'))')
+        .run(icId, icStoreId, 'draft', String(body.note || ''), actorName);
+      var icExplicitIds = Array.isArray(body.item_ids) ? body.item_ids : null;
+      var icItemsSrc = icExplicitIds && icExplicitIds.length
+        ? icExplicitIds.map(function(id) { return db.prepare('SELECT * FROM menu_items WHERE id = ? AND store_id = ?').get(id, icStoreId); }).filter(Boolean)
+        : db.prepare('SELECT * FROM menu_items WHERE store_id = ? AND stock_qty >= 0').all(icStoreId);
+      icItemsSrc.forEach(function(it) {
+        var exp = Number(it.stock_qty) >= 0 ? Number(it.stock_qty) : 0;
+        db.prepare('INSERT INTO inventory_count_items (id, count_id, item_id, item_name, expected_qty, counted_qty, variance) VALUES (?, ?, ?, ?, ?, ?, 0)')
+          .run('ici_' + generateId(), icId, it.id, it.name, exp, exp);
+      });
+      return json(res, 200, {
+        inventory_count: db.prepare('SELECT * FROM inventory_counts WHERE id = ?').get(icId),
+        items: db.prepare('SELECT * FROM inventory_count_items WHERE count_id = ?').all(icId)
+      });
+    }
+
+    if (method === 'GET' && (m = urlPath.match(/^\/api\/ecosystem\/stores\/([^/]+)\/inventory-counts$/))) {
+      var icListStoreId = m[1];
+      var icListStore = switchToStoreOwner(icListStoreId);
+      if (!icListStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, icListStore)) return null;
+      var icRows = db.prepare('SELECT * FROM inventory_counts WHERE store_id = ? ORDER BY created_at DESC').all(icListStoreId);
+      return json(res, 200, { inventory_counts: icRows });
+    }
+
+    if (method === 'GET' && (m = urlPath.match(/^\/api\/ecosystem\/inventory-counts\/([^/]+)$/))) {
+      var icGetId = m[1];
+      var icGetStoreId = qStoreId();
+      var icGetStore = switchToStoreOwner(icGetStoreId);
+      if (!icGetStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, icGetStore)) return null;
+      var icGet = db.prepare('SELECT * FROM inventory_counts WHERE id = ? AND store_id = ?').get(icGetId, icGetStoreId);
+      if (!icGet) return json(res, 404, { error: 'Inventory count not found.' });
+      return json(res, 200, { inventory_count: icGet, items: db.prepare('SELECT * FROM inventory_count_items WHERE count_id = ?').all(icGetId) });
+    }
+
+    if (method === 'POST' && (m = urlPath.match(/^\/api\/ecosystem\/inventory-counts\/([^/]+)\/submit$/))) {
+      var icSubId = m[1];
+      var icSubStoreId = qStoreId();
+      var icSubStore = switchToStoreOwner(icSubStoreId);
+      if (!icSubStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, icSubStore)) return null;
+      var icSubRow = db.prepare('SELECT * FROM inventory_counts WHERE id = ? AND store_id = ?').get(icSubId, icSubStoreId);
+      if (!icSubRow) return json(res, 404, { error: 'Inventory count not found.' });
+      if (icSubRow.status === 'finalized' || icSubRow.status === 'cancelled') {
+        return json(res, 400, { error: 'Cannot submit a ' + icSubRow.status + ' count.' });
+      }
+      var icSubItems = Array.isArray(body.items) ? body.items : [];
+      icSubItems.forEach(function(it) {
+        var row = db.prepare('SELECT * FROM inventory_count_items WHERE count_id = ? AND item_id = ?').get(icSubId, it.item_id);
+        if (row) {
+          var counted = Number(it.counted_qty) || 0;
+          db.prepare('UPDATE inventory_count_items SET counted_qty = ?, variance = ? WHERE id = ?').run(counted, counted - Number(row.expected_qty), row.id);
+        }
+      });
+      db.prepare('UPDATE inventory_counts SET status = ?, submitted_at = datetime(\'now\') WHERE id = ?').run('submitted', icSubId);
+      return json(res, 200, { inventory_count: db.prepare('SELECT * FROM inventory_counts WHERE id = ?').get(icSubId), items: db.prepare('SELECT * FROM inventory_count_items WHERE count_id = ?').all(icSubId) });
+    }
+
+    if (method === 'POST' && (m = urlPath.match(/^\/api\/ecosystem\/inventory-counts\/([^/]+)\/finalize$/))) {
+      var icFinId = m[1];
+      var icFinStoreId = qStoreId();
+      var icFinStore = switchToStoreOwner(icFinStoreId);
+      if (!icFinStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, icFinStore)) return null;
+      var icFinRow = db.prepare('SELECT * FROM inventory_counts WHERE id = ? AND store_id = ?').get(icFinId, icFinStoreId);
+      if (!icFinRow) return json(res, 404, { error: 'Inventory count not found.' });
+      if (icFinRow.status !== 'submitted') return json(res, 400, { error: 'Only submitted counts can be finalized.' });
+      var icFinItems = db.prepare('SELECT * FROM inventory_count_items WHERE count_id = ?').all(icFinId);
+      icFinItems.forEach(function(it) {
+        if (Number(it.variance) !== 0) {
+          adjustStock(icFinStoreId, it.item_id, Number(it.variance), 'count_adjustment', {
+            refType: 'inventory_count', refId: icFinId, createdBy: actorName, reason: 'Physical count adjustment', allowNegative: true
+          });
+        }
+      });
+      db.prepare('UPDATE inventory_counts SET status = ?, finalized_at = datetime(\'now\') WHERE id = ?').run('finalized', icFinId);
+      return json(res, 200, { inventory_count: db.prepare('SELECT * FROM inventory_counts WHERE id = ?').get(icFinId) });
+    }
+
+    if (method === 'POST' && (m = urlPath.match(/^\/api\/ecosystem\/inventory-counts\/([^/]+)\/cancel$/))) {
+      var icCanId = m[1];
+      var icCanStoreId = qStoreId();
+      var icCanStore = switchToStoreOwner(icCanStoreId);
+      if (!icCanStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, icCanStore)) return null;
+      var icCanRow = db.prepare('SELECT * FROM inventory_counts WHERE id = ? AND store_id = ?').get(icCanId, icCanStoreId);
+      if (!icCanRow) return json(res, 404, { error: 'Inventory count not found.' });
+      if (icCanRow.status === 'finalized') return json(res, 400, { error: 'Cannot cancel a finalized count.' });
+      db.prepare('UPDATE inventory_counts SET status = ? WHERE id = ?').run('cancelled', icCanId);
+      return json(res, 200, { inventory_count: db.prepare('SELECT * FROM inventory_counts WHERE id = ?').get(icCanId) });
+    }
+
+    // ---------- 5) PRODUCTION ----------
+    if (method === 'POST' && (m = urlPath.match(/^\/api\/ecosystem\/stores\/([^/]+)\/production-recipes$/))) {
+      var prStoreId = m[1];
+      var prStore = switchToStoreOwner(prStoreId);
+      if (!prStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, prStore)) return null;
+      var prIngredients = Array.isArray(body.ingredients) ? body.ingredients : [];
+      if (!body.output_item_id || !prIngredients.length) return json(res, 400, { error: 'output_item_id and ingredients are required.' });
+      var prId = 'pr_' + generateId();
+      db.prepare('INSERT INTO production_recipes (id, store_id, output_item_id, output_item_name, yield_qty, ingredients_json, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime(\'now\'))')
+        .run(prId, prStoreId, String(body.output_item_id), String(body.output_item_name || ''), Number(body.yield_qty) || 1, JSON.stringify(prIngredients));
+      return json(res, 200, { recipe: db.prepare('SELECT * FROM production_recipes WHERE id = ?').get(prId) });
+    }
+
+    if (method === 'GET' && (m = urlPath.match(/^\/api\/ecosystem\/stores\/([^/]+)\/production-recipes$/))) {
+      var prListStoreId = m[1];
+      var prListStore = switchToStoreOwner(prListStoreId);
+      if (!prListStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, prListStore)) return null;
+      var prRows = db.prepare('SELECT * FROM production_recipes WHERE store_id = ? ORDER BY created_at DESC').all(prListStoreId);
+      prRows.forEach(function(r) { r.ingredients = safeJson(r.ingredients_json, []); });
+      return json(res, 200, { recipes: prRows });
+    }
+
+    if (method === 'DELETE' && (m = urlPath.match(/^\/api\/ecosystem\/production-recipes\/([^/]+)$/))) {
+      var prDelId = m[1];
+      var prDelStoreId = qStoreId();
+      var prDelStore = switchToStoreOwner(prDelStoreId);
+      if (!prDelStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, prDelStore)) return null;
+      db.prepare('DELETE FROM production_recipes WHERE id = ? AND store_id = ?').run(prDelId, prDelStoreId);
+      return json(res, 200, { success: true });
+    }
+
+    if (method === 'POST' && (m = urlPath.match(/^\/api\/ecosystem\/stores\/([^/]+)\/production-orders$/))) {
+      var proStoreId = m[1];
+      var proStore = switchToStoreOwner(proStoreId);
+      if (!proStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, proStore)) return null;
+      var proQty = Number(body.qty_produced) || 0;
+      if (proQty <= 0) return json(res, 400, { error: 'qty_produced must be greater than 0.' });
+      var proOutputId = String(body.output_item_id || '');
+      var proOutputName = String(body.output_item_name || '');
+      var proIngredients = Array.isArray(body.ingredients) ? body.ingredients.slice() : null;
+      var proRecipeId = body.recipe_id ? String(body.recipe_id) : '';
+      if (!proIngredients && proRecipeId) {
+        var proRecipe = db.prepare('SELECT * FROM production_recipes WHERE id = ? AND store_id = ?').get(proRecipeId, proStoreId);
+        if (!proRecipe) return json(res, 404, { error: 'Recipe not found.' });
+        var proScale = proQty / (Number(proRecipe.yield_qty) || 1);
+        proIngredients = safeJson(proRecipe.ingredients_json, []).map(function(ing) {
+          return { item_id: ing.item_id, item_name: ing.item_name, qty: (Number(ing.qty) || 0) * proScale };
+        });
+        if (!proOutputId) proOutputId = proRecipe.output_item_id;
+        if (!proOutputName) proOutputName = proRecipe.output_item_name;
+      }
+      if (!proIngredients || !proIngredients.length || !proOutputId) {
+        return json(res, 400, { error: 'output_item_id and ingredients (or recipe_id) are required.' });
+      }
+      for (var pi = 0; pi < proIngredients.length; pi++) {
+        var ingRow = db.prepare('SELECT * FROM menu_items WHERE id = ? AND store_id = ?').get(proIngredients[pi].item_id, proStoreId);
+        var ingAvail = ingRow && Number(ingRow.stock_qty) >= 0 ? Number(ingRow.stock_qty) : 0;
+        if (!ingRow || ingAvail < Number(proIngredients[pi].qty)) {
+          return json(res, 400, { error: 'Insufficient stock for ingredient: ' + (proIngredients[pi].item_name || proIngredients[pi].item_id), available: ingAvail });
+        }
+      }
+      var proId = 'pro_' + generateId();
+      var proTotalCost = 0;
+      proIngredients.forEach(function(ing) {
+        var ingRow2 = db.prepare('SELECT * FROM menu_items WHERE id = ? AND store_id = ?').get(ing.item_id, proStoreId);
+        proTotalCost += (ingRow2 ? Number(ingRow2.cost_price) || 0 : 0) * Number(ing.qty);
+        adjustStock(proStoreId, ing.item_id, -Number(ing.qty), 'production_consume', { refType: 'production_order', refId: proId, createdBy: actorName });
+      });
+      adjustStock(proStoreId, proOutputId, proQty, 'production_output', { refType: 'production_order', refId: proId, createdBy: actorName, allowNegative: true });
+      if (proTotalCost > 0) {
+        db.prepare('UPDATE menu_items SET cost_price = ? WHERE id = ? AND store_id = ?').run(Number((proTotalCost / proQty).toFixed(4)), proOutputId, proStoreId);
+      }
+      db.prepare('INSERT INTO production_orders (id, store_id, recipe_id, output_item_id, output_item_name, qty_produced, ingredients_json, total_cost, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))')
+        .run(proId, proStoreId, proRecipeId, proOutputId, proOutputName, proQty, JSON.stringify(proIngredients), proTotalCost, actorName);
+      return json(res, 200, { production_order: db.prepare('SELECT * FROM production_orders WHERE id = ?').get(proId) });
+    }
+
+    if (method === 'GET' && (m = urlPath.match(/^\/api\/ecosystem\/stores\/([^/]+)\/production-orders$/))) {
+      var proListStoreId = m[1];
+      var proListStore = switchToStoreOwner(proListStoreId);
+      if (!proListStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, proListStore)) return null;
+      var proRows = db.prepare('SELECT * FROM production_orders WHERE store_id = ? ORDER BY created_at DESC').all(proListStoreId);
+      return json(res, 200, { production_orders: proRows });
+    }
+
+    // ---------- 6) COST / VALUATION ----------
+    if (method === 'POST' && (m = urlPath.match(/^\/api\/ecosystem\/items\/([^/]+)\/cost$/))) {
+      var cpItemId = m[1];
+      var cpStoreId = qStoreId();
+      var cpStore = switchToStoreOwner(cpStoreId);
+      if (!cpStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, cpStore)) return null;
+      var cpCost = Number(body.cost_price);
+      if (!isFinite(cpCost) || cpCost < 0) return json(res, 400, { error: 'Valid cost_price is required.' });
+      db.prepare('UPDATE menu_items SET cost_price = ? WHERE id = ? AND store_id = ?').run(cpCost, cpItemId, cpStoreId);
+      return json(res, 200, { item: db.prepare('SELECT * FROM menu_items WHERE id = ?').get(cpItemId) });
+    }
+
+    if (method === 'GET' && (m = urlPath.match(/^\/api\/ecosystem\/stores\/([^/]+)\/inventory-valuation$/))) {
+      var ivStoreId = m[1];
+      var ivStore = switchToStoreOwner(ivStoreId);
+      if (!ivStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, ivStore)) return null;
+      var ivAll = db.prepare('SELECT * FROM menu_items WHERE store_id = ?').all(ivStoreId);
+      var ivTracked = [], ivUntracked = [], ivTotalValue = 0, ivTotalQty = 0;
+      ivAll.forEach(function(it) {
+        var qty = Number(it.stock_qty);
+        var cost = Number(it.cost_price) || 0;
+        if (qty >= 0) {
+          var value = qty * cost;
+          ivTotalValue += value; ivTotalQty += qty;
+          ivTracked.push({ id: it.id, name: it.name, stock_qty: qty, cost_price: cost, value: value });
+        } else {
+          ivUntracked.push({ id: it.id, name: it.name, cost_price: cost });
+        }
+      });
+      return json(res, 200, {
+        tracked_items: ivTracked, untracked_items: ivUntracked,
+        total_value: Number(ivTotalValue.toFixed(2)), total_qty: ivTotalQty, total_tracked_items: ivTracked.length
+      });
+    }
+
+    // ---------- 7) LABEL PRINTING ----------
+    if (method === 'GET' && (m = urlPath.match(/^\/api\/ecosystem\/items\/([^/]+)\/label$/))) {
+      var lblItemId = m[1];
+      var lblStoreId = qStoreId();
+      var lblSize = parseInt(invQuery.get('size'), 10) || 200;
+      var lblStore = switchToStoreOwner(lblStoreId);
+      if (!lblStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, lblStore)) return null;
+      var lblItem = db.prepare('SELECT * FROM menu_items WHERE id = ? AND store_id = ?').get(lblItemId, lblStoreId);
+      if (!lblItem) return json(res, 404, { error: 'Item not found.' });
+      if (!QRCode) return json(res, 500, { error: 'QR library not available on server.' });
+      var lblPayload = lblItem.barcode && lblItem.barcode.trim() ? lblItem.barcode.trim() : lblItem.id;
+      return new Promise(function(resolve) {
+        QRCode.toBuffer(lblPayload, { width: lblSize, margin: 1 }, function(err, buf) {
+          if (err) { json(res, 500, { error: 'Label generation failed.' }); return resolve(null); }
+          res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' });
+          res.end(buf);
+          resolve(null);
+        });
+      });
+    }
+
+    if (method === 'GET' && (m = urlPath.match(/^\/api\/ecosystem\/stores\/([^/]+)\/labels$/))) {
+      var blkStoreId = m[1];
+      var blkIds = (invQuery.get('ids') || '').split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+      var blkStore = switchToStoreOwner(blkStoreId);
+      if (!blkStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, blkStore)) return null;
+      if (!blkIds.length) return json(res, 400, { error: 'ids query param is required.' });
+      if (!QRCode) return json(res, 500, { error: 'QR library not available on server.' });
+      var blkItems = blkIds.map(function(id) { return db.prepare('SELECT * FROM menu_items WHERE id = ? AND store_id = ?').get(id, blkStoreId); }).filter(Boolean);
+      return Promise.all(blkItems.map(function(it) {
+        var payload = it.barcode && it.barcode.trim() ? it.barcode.trim() : it.id;
+        return QRCode.toDataURL(payload, { width: 200, margin: 1 }).then(function(dataUrl) {
+          return { id: it.id, name: it.name, price: it.price, barcode: it.barcode || it.id, qr_data_url: dataUrl };
+        }).catch(function() {
+          return { id: it.id, name: it.name, price: it.price, barcode: it.barcode || it.id, qr_data_url: null };
+        });
+      })).then(function(results) {
+        return json(res, 200, { items: results });
+      });
+    }
+
+    // ---------- 8) STAFF ----------
+    if (method === 'POST' && (m = urlPath.match(/^\/api\/ecosystem\/stores\/([^/]+)\/staff$/))) {
+      var stfStoreId = m[1];
+      var stfStore = switchToStoreOwner(stfStoreId);
+      if (!stfStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, stfStore)) return null;
+      if (!body.name) return json(res, 400, { error: 'name is required.' });
+      var stfId = 'stf_' + generateId();
+      db.prepare('INSERT INTO staff_members (id, store_id, name, role, phone, email, salary, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))')
+        .run(stfId, stfStoreId, String(body.name), String(body.role || 'staff'), String(body.phone || ''), String(body.email || ''), Number(body.salary) || 0, 'active');
+      return json(res, 200, { staff: db.prepare('SELECT * FROM staff_members WHERE id = ?').get(stfId) });
+    }
+
+    if (method === 'GET' && (m = urlPath.match(/^\/api\/ecosystem\/stores\/([^/]+)\/staff$/))) {
+      var stfListStoreId = m[1];
+      var stfListStore = switchToStoreOwner(stfListStoreId);
+      if (!stfListStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, stfListStore)) return null;
+      var stfRows = db.prepare('SELECT * FROM staff_members WHERE store_id = ? ORDER BY created_at DESC').all(stfListStoreId);
+      return json(res, 200, { staff: stfRows });
+    }
+
+    if (method === 'PATCH' && (m = urlPath.match(/^\/api\/ecosystem\/staff\/([^/]+)$/))) {
+      var stfPatchId = m[1];
+      var stfPatchStoreId = qStoreId();
+      var stfPatchStore = switchToStoreOwner(stfPatchStoreId);
+      if (!stfPatchStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, stfPatchStore)) return null;
+      var stfPatchRow = db.prepare('SELECT * FROM staff_members WHERE id = ? AND store_id = ?').get(stfPatchId, stfPatchStoreId);
+      if (!stfPatchRow) return json(res, 404, { error: 'Staff member not found.' });
+      db.prepare('UPDATE staff_members SET name = ?, role = ?, phone = ?, email = ?, salary = ?, status = ? WHERE id = ?').run(
+        body.name != null ? String(body.name) : stfPatchRow.name,
+        body.role != null ? String(body.role) : stfPatchRow.role,
+        body.phone != null ? String(body.phone) : stfPatchRow.phone,
+        body.email != null ? String(body.email) : stfPatchRow.email,
+        body.salary != null ? Number(body.salary) : stfPatchRow.salary,
+        body.status != null ? String(body.status) : stfPatchRow.status,
+        stfPatchId
+      );
+      return json(res, 200, { staff: db.prepare('SELECT * FROM staff_members WHERE id = ?').get(stfPatchId) });
+    }
+
+    if (method === 'DELETE' && (m = urlPath.match(/^\/api\/ecosystem\/staff\/([^/]+)$/))) {
+      var stfDelId = m[1];
+      var stfDelStoreId = qStoreId();
+      var stfDelStore = switchToStoreOwner(stfDelStoreId);
+      if (!stfDelStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, stfDelStore)) return null;
+      db.prepare('DELETE FROM staff_members WHERE id = ? AND store_id = ?').run(stfDelId, stfDelStoreId);
+      return json(res, 200, { success: true });
+    }
+
+    // ---------- 9) EXPENSES ----------
+    if (method === 'POST' && (m = urlPath.match(/^\/api\/ecosystem\/stores\/([^/]+)\/expenses$/))) {
+      var expStoreId = m[1];
+      var expStore = switchToStoreOwner(expStoreId);
+      if (!expStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, expStore)) return null;
+      var expAmount = Number(body.amount);
+      if (!body.title || !isFinite(expAmount) || expAmount <= 0) {
+        return json(res, 400, { error: 'title and a positive amount are required.' });
+      }
+      var expId = 'exp_' + generateId();
+      db.prepare('INSERT INTO business_expenses (id, store_id, title, category, amount, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))')
+        .run(expId, expStoreId, String(body.title), String(body.category || 'general'), expAmount, String(body.note || ''), actorName);
+      return json(res, 200, { expense: db.prepare('SELECT * FROM business_expenses WHERE id = ?').get(expId) });
+    }
+
+    if (method === 'GET' && (m = urlPath.match(/^\/api\/ecosystem\/stores\/([^/]+)\/expenses$/))) {
+      var expListStoreId = m[1];
+      var expListStore = switchToStoreOwner(expListStoreId);
+      if (!expListStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, expListStore)) return null;
+      var expCategory = invQuery.get('category') || '';
+      var expRows = expCategory
+        ? db.prepare('SELECT * FROM business_expenses WHERE store_id = ? AND category = ? ORDER BY created_at DESC').all(expListStoreId, expCategory)
+        : db.prepare('SELECT * FROM business_expenses WHERE store_id = ? ORDER BY created_at DESC').all(expListStoreId);
+      var expTotal = 0; expRows.forEach(function(e) { expTotal += Number(e.amount) || 0; });
+      return json(res, 200, { expenses: expRows, total: Number(expTotal.toFixed(2)) });
+    }
+
+    if (method === 'DELETE' && (m = urlPath.match(/^\/api\/ecosystem\/expenses\/([^/]+)$/))) {
+      var expDelId = m[1];
+      var expDelStoreId = qStoreId();
+      var expDelStore = switchToStoreOwner(expDelStoreId);
+      if (!expDelStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, expDelStore)) return null;
+      db.prepare('DELETE FROM business_expenses WHERE id = ? AND store_id = ?').run(expDelId, expDelStoreId);
+      return json(res, 200, { success: true });
+    }
     return null;
   }).catch(function(err) {
     console.error('Ecosystem API error:', err && err.message);
