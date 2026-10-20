@@ -686,7 +686,7 @@ if (type) {
     }
 
     // ============ ORDERS ============
-    if (urlPath.match(/^\/api\/ecosystem\/stores\/[^/]+\/orders$/) && method === 'POST') {
+        if (urlPath.match(/^\/api\/ecosystem\/stores\/[^/]+\/orders$/) && method === 'POST') {
       var storeId = urlPath.split('/')[4];
       var store = switchToStoreOwner(storeId);
       if (!store) return json(res, 404, { error: 'Store not found.' });
@@ -696,11 +696,17 @@ if (type) {
       var subtotal = 0;
       body.items.forEach(function(item) { subtotal += Number(item.price || 0) * Number(item.qty || 1); });
       var taxRate = Number(body.tax_rate || 0);
-      var tax = subtotal * taxRate / 100;
       var discount = Number(body.discount || 0);
-      var total = subtotal + tax - discount;
+      var serviceAmount = Number(body.service_amount || 0);
+      var tax = body.tax_amount !== undefined ? Number(body.tax_amount) : (subtotal * taxRate / 100);
+      var combinedTax = tax + serviceAmount;
+      var total = body.total !== undefined ? Number(body.total) : (subtotal - discount + combinedTax);
+      var noteFinal = String(body.note || '');
+      if (body.tip) noteFinal = '[tip:' + Number(body.tip).toFixed(2) + '] ' + noteFinal;
+      if (serviceAmount > 0) noteFinal = '[service:' + serviceAmount.toFixed(2) + '] ' + noteFinal;
 
-      db.prepare('INSERT INTO store_orders (id, store_id, table_number, customer_name, customer_phone, customer_email, order_type, status, subtotal, tax, discount, total, note, payment_method, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(orderId, storeId, body.table_number || '', body.customer_name || 'Guest', body.customer_phone || '', body.customer_email || '', body.order_type || 'dine_in', 'pending', subtotal, tax, discount, total, body.note || '', body.payment_method || 'cash', 'unpaid');
+      db.prepare('INSERT INTO store_orders (id, store_id, table_number, customer_name, customer_phone, customer_email, order_type, status, subtotal, tax, discount, total, note, payment_method, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(orderId, storeId, body.table_number || '', body.customer_name || 'Guest', body.customer_phone || '', body.customer_email || '', body.order_type || 'dine_in', body.status || 'pending', subtotal, combinedTax, discount, total, noteFinal, body.payment_method || 'cash', body.payment_status || 'unpaid');
 
       var insertItem = db.prepare('INSERT INTO order_items (id, order_id, menu_item_id, name, price, qty, note) VALUES (?, ?, ?, ?, ?, ?, ?)');
       body.items.forEach(function(item) {
@@ -709,8 +715,11 @@ if (type) {
 
       var order = db.prepare('SELECT * FROM store_orders WHERE id = ?').get(orderId);
       order.items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(orderId);
-      queueMessage(db, storeId, 'whatsapp', store.whatsapp_number || store.phone || '', 'New order #' + orderId.slice(-6).toUpperCase() + ' from ' + order.customer_name + '.', 'order', orderId);
-      if (body.customer_phone) queueMessage(db, storeId, 'whatsapp', body.customer_phone, 'Your order at ' + store.name + ' was received. Order #' + orderId.slice(-6).toUpperCase() + '.', 'order', orderId);
+
+      if (!body.skip_notifications) {
+        queueMessage(db, storeId, 'whatsapp', store.whatsapp_number || store.phone || '', 'New order #' + orderId.slice(-6).toUpperCase() + ' from ' + order.customer_name + '.', 'order', orderId);
+        if (body.customer_phone) queueMessage(db, storeId, 'whatsapp', body.customer_phone, 'Your order at ' + store.name + ' was received. Order #' + orderId.slice(-6).toUpperCase() + '.', 'order', orderId);
+      }
 
       if (order.customer_email) {
         var orderItemsHtml = (order.items || []).map(function(it) {
