@@ -606,19 +606,31 @@ if (type) {
     }
 
     // ============ MENU ITEMS ============
-    if (urlPath.match(/^\/api\/ecosystem\/stores\/[^/]+\/items$/) && method === 'POST') {
+       if (urlPath.match(/^\/api\/ecosystem\/stores\/[^/]+\/items$/) && method === 'POST') {
       var storeId = urlPath.split('/')[4];
       var store = db.prepare('SELECT * FROM reg.stores WHERE id = ?').get(storeId);
       if (!store) return json(res, 404, { error: 'Store not found.' });
       if (requireStoreOwner(res, user, store)) return;
       if (!body.name || body.price === undefined) return json(res, 400, { error: 'Item name and price are required.' });
+      var categoryId = body.category_id || null;
+      if (!categoryId && body.category_name) {
+        var catRow = db.prepare('SELECT id FROM menu_categories WHERE store_id = ? AND lower(name) = lower(?)').get(storeId, body.category_name);
+        if (catRow) {
+          categoryId = catRow.id;
+        } else {
+          categoryId = 'cat_' + generateId();
+          var catMaxOrder = db.prepare('SELECT COALESCE(MAX(sort_order), 0) + 1 as next FROM menu_categories WHERE store_id = ?').get(storeId).next;
+          db.prepare('INSERT INTO menu_categories (id, store_id, name, sort_order) VALUES (?, ?, ?, ?)').run(categoryId, storeId, body.category_name, catMaxOrder);
+        }
+      }
       var itemId = 'item_' + generateId();
       var maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order), 0) + 1 as next FROM menu_items WHERE store_id = ?').get(storeId).next;
-      db.prepare('INSERT INTO menu_items (id, store_id, category_id, name, description, price, image_url, is_available, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(itemId, storeId, body.category_id || null, body.name, body.description || '', body.price, body.image_url || '', body.is_available !== undefined ? (body.is_available ? 1 : 0) : 1, body.sort_order || maxOrder);
+      db.prepare('INSERT INTO menu_items (id, store_id, category_id, name, description, price, image_url, is_available, barcode, stock_qty, cost_price, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(itemId, storeId, categoryId, body.name, body.description || '', body.price, body.image_url || '', body.is_available !== undefined ? (body.is_available ? 1 : 0) : 1, body.barcode || '', body.stock_qty !== undefined ? Number(body.stock_qty) : -1, body.cost_price !== undefined ? Number(body.cost_price) : 0, body.sort_order || maxOrder);
       return json(res, 201, { ok: true, item: db.prepare('SELECT * FROM menu_items WHERE id = ?').get(itemId) });
     }
 
-    if (urlPath.match(/^\/api\/ecosystem\/items\/[^/]+$/) && method === 'PUT') {
+      if (urlPath.match(/^\/api\/ecosystem\/items\/[^/]+$/) && method === 'PUT') {
       var itemId = urlPath.split('/').pop();
       var existing = db.prepare('SELECT i.*, s.owner_id FROM menu_items i LEFT JOIN reg.stores s ON s.id = i.store_id WHERE i.id = ?').get(itemId);
       if (!existing) return json(res, 404, { error: 'Item not found.' });
@@ -627,18 +639,43 @@ if (type) {
       if (body.description !== undefined) existing.description = body.description;
       if (body.price !== undefined) existing.price = body.price;
       if (body.category_id !== undefined) existing.category_id = body.category_id;
+      if (body.category_name !== undefined && body.category_id === undefined) {
+        var catRow2 = db.prepare('SELECT id FROM menu_categories WHERE store_id = ? AND lower(name) = lower(?)').get(existing.store_id, body.category_name);
+        if (catRow2) {
+          existing.category_id = catRow2.id;
+        } else {
+          var newCatId = 'cat_' + generateId();
+          var catMaxOrder2 = db.prepare('SELECT COALESCE(MAX(sort_order), 0) + 1 as next FROM menu_categories WHERE store_id = ?').get(existing.store_id).next;
+          db.prepare('INSERT INTO menu_categories (id, store_id, name, sort_order) VALUES (?, ?, ?, ?)').run(newCatId, existing.store_id, body.category_name, catMaxOrder2);
+          existing.category_id = newCatId;
+        }
+      }
       if (body.image_url !== undefined) existing.image_url = body.image_url;
       if (body.is_available !== undefined) existing.is_available = body.is_available ? 1 : 0;
-      db.prepare('UPDATE menu_items SET name=?, description=?, price=?, category_id=?, image_url=?, is_available=? WHERE id=?').run(existing.name, existing.description, existing.price, existing.category_id, existing.image_url, existing.is_available, itemId);
+      if (body.barcode !== undefined) existing.barcode = body.barcode;
+      if (body.stock_qty !== undefined) existing.stock_qty = Number(body.stock_qty);
+      if (body.cost_price !== undefined) existing.cost_price = Number(body.cost_price);
+      db.prepare('UPDATE menu_items SET name=?, description=?, price=?, category_id=?, image_url=?, is_available=?, barcode=?, stock_qty=?, cost_price=? WHERE id=?')
+        .run(existing.name, existing.description, existing.price, existing.category_id, existing.image_url, existing.is_available, existing.barcode || '', existing.stock_qty, existing.cost_price, itemId);
       return json(res, 200, { ok: true, item: existing });
     }
 
-    if (urlPath.match(/^\/api\/ecosystem\/items\/[^/]+$/) && method === 'DELETE') {
-      var itemId = urlPath.split('/').pop();
-      var item = db.prepare('SELECT i.*, s.owner_id FROM menu_items i LEFT JOIN reg.stores s ON s.id = i.store_id WHERE i.id = ?').get(itemId);
-      if (requireStoreOwner(res, user, item)) return;
-      db.prepare('DELETE FROM menu_items WHERE id = ?').run(itemId);
+   if (urlPath.match(/^\/api\/ecosystem\/items\/[^/]+$/) && method === 'DELETE') {
+      var delItemId = urlPath.split('/').pop();
+      var delExisting = db.prepare('SELECT i.*, s.owner_id FROM menu_items i LEFT JOIN reg.stores s ON s.id = i.store_id WHERE i.id = ?').get(delItemId);
+      if (!delExisting) return json(res, 404, { error: 'Item not found.' });
+      if (requireStoreOwner(res, user, delExisting)) return;
+      db.prepare('DELETE FROM menu_items WHERE id = ?').run(delItemId);
       return json(res, 200, { ok: true });
+    }
+    
+    if (urlPath.match(/^\/api\/ecosystem\/stores\/[^/]+\/items$/) && method === 'GET') {
+      var itemsStoreId = urlPath.split('/')[4];
+      var itemsStore = db.prepare('SELECT * FROM reg.stores WHERE id = ?').get(itemsStoreId);
+      if (!itemsStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, itemsStore)) return;
+      var itemRows = db.prepare('SELECT i.*, c.name as category_name FROM menu_items i LEFT JOIN menu_categories c ON c.id = i.category_id WHERE i.store_id = ? ORDER BY i.sort_order').all(itemsStoreId);
+      return json(res, 200, { ok: true, items: itemRows });
     }
 
     // ============ ORDERS ============
