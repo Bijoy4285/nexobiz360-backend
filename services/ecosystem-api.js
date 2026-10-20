@@ -514,7 +514,7 @@ if (type) {
       return json(res, 200, { ok: true, stores: stores });
     }
 
-    if (urlPath.match(/^\/api\/ecosystem\/stores\/[^/]+$/) && method === 'GET') {
+        if (urlPath.match(/^\/api\/ecosystem\/stores\/[^/]+$/) && method === 'GET') {
       var storeId = urlPath.split('/').pop();
       var store = switchToStoreOwner(storeId);
       if (!store) return json(res, 404, { error: 'Store not found.' });
@@ -528,7 +528,9 @@ if (type) {
       });
       store.menu_categories = categories;
       try { store.gym_plans = db.prepare('SELECT * FROM gym_plans WHERE store_id = ? ORDER BY price ASC').all(storeId); } catch(e){ store.gym_plans = []; }
-      return json(res, 200, { ok: true, store: normalizeStore(store) });
+      var normalizedStore = normalizeStore(store);
+      if (normalizedStore && normalizedStore.settings_json === undefined) { normalizedStore.settings_json = store.settings_json || '{}'; }
+      return json(res, 200, { ok: true, store: normalizedStore });
     }
 
     if (urlPath === '/api/ecosystem/stores' && method === 'POST') {
@@ -543,9 +545,7 @@ if (type) {
       }
       db.prepare('INSERT INTO reg.stores (id, owner_id, name, type, description, address, phone, email, lat, lng, logo_url, cover_url, is_active, slug, template_key, accent_color, tagline, opening_hours, booking_enabled, ordering_enabled, ai_enabled, whatsapp_number, services_json, gallery_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
         .run(id, ownerId(user), body.name, body.type, body.description || '', body.address || '', body.phone || '', body.email || '', body.lat || 0, body.lng || 0, body.logo_url || '', body.cover_url || '', (body.is_active === false || body.active === false) ? 0 : 1, slug, body.template_key || 'clean', body.accent_color || '#0891b2', body.tagline || '', body.opening_hours || '', body.booking_enabled === false ? 0 : 1, body.ordering_enabled === false ? 0 : 1, body.ai_enabled === false ? 0 : 1, body.whatsapp_number || body.phone || '', JSON.stringify(body.services || []), JSON.stringify(body.gallery || []));
-      // Ensure the owner's DB has tables for the store's module type.
       try { provisionUserDb(ownerId(user), [body.type]); } catch(e) {}
-      // Free `core` storefront module is auto-enabled for every owner.
       try {
         var coreOwner = ownerId(user);
         var coreExists = db.prepare('SELECT id FROM reg.user_modules WHERE user_id = ? AND module_key = ?').get(coreOwner, 'core');
@@ -570,9 +570,16 @@ if (type) {
       if (body.slug !== undefined) existing.slug = slugify(body.slug || existing.name);
       existing.services_json = JSON.stringify(Array.isArray(body.services) ? body.services : safeJson(existing.services_json, []));
       existing.gallery_json = JSON.stringify(Array.isArray(body.gallery) ? body.gallery : safeJson(existing.gallery_json, []));
-      db.prepare('UPDATE reg.stores SET name=?, type=?, description=?, address=?, phone=?, email=?, lat=?, lng=?, logo_url=?, cover_url=?, is_active=?, slug=?, template_key=?, accent_color=?, tagline=?, opening_hours=?, booking_enabled=?, ordering_enabled=?, ai_enabled=?, whatsapp_number=?, services_json=?, gallery_json=?, updated_at=datetime(\'now\') WHERE id=?')
-        .run(existing.name, existing.type, existing.description, existing.address, existing.phone, existing.email, existing.lat, existing.lng, existing.logo_url, existing.cover_url, existing.is_active, existing.slug || '', existing.template_key || 'clean', existing.accent_color || '#0891b2', existing.tagline || '', existing.opening_hours || '', existing.booking_enabled ? 1 : 0, existing.ordering_enabled ? 1 : 0, existing.ai_enabled ? 1 : 0, existing.whatsapp_number || '', existing.services_json, existing.gallery_json, storeId);
-      return json(res, 200, { ok: true, store: normalizeStore(existing) });
+      if (body.settings_json !== undefined) {
+        existing.settings_json = typeof body.settings_json === 'string' ? body.settings_json : JSON.stringify(body.settings_json);
+      } else if (existing.settings_json === undefined || existing.settings_json === null) {
+        existing.settings_json = '{}';
+      }
+      db.prepare('UPDATE reg.stores SET name=?, type=?, description=?, address=?, phone=?, email=?, lat=?, lng=?, logo_url=?, cover_url=?, is_active=?, slug=?, template_key=?, accent_color=?, tagline=?, opening_hours=?, booking_enabled=?, ordering_enabled=?, ai_enabled=?, whatsapp_number=?, services_json=?, gallery_json=?, settings_json=?, updated_at=datetime(\'now\') WHERE id=?')
+        .run(existing.name, existing.type, existing.description, existing.address, existing.phone, existing.email, existing.lat, existing.lng, existing.logo_url, existing.cover_url, existing.is_active, existing.slug || '', existing.template_key || 'clean', existing.accent_color || '#0891b2', existing.tagline || '', existing.opening_hours || '', existing.booking_enabled ? 1 : 0, existing.ordering_enabled ? 1 : 0, existing.ai_enabled ? 1 : 0, existing.whatsapp_number || '', existing.services_json, existing.gallery_json, existing.settings_json, storeId);
+      var normalizedPut = normalizeStore(existing);
+      if (normalizedPut && normalizedPut.settings_json === undefined) { normalizedPut.settings_json = existing.settings_json || '{}'; }
+      return json(res, 200, { ok: true, store: normalizedPut });
     }
 
     if (urlPath.match(/^\/api\/ecosystem\/stores\/[^/]+$/) && method === 'DELETE') {
