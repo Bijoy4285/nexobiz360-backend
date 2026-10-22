@@ -380,6 +380,7 @@ function handleEcosystem(req, res, user) {
     // ============ DASHBOARD AGGREGATE ============
     if (urlPath === '/api/ecosystem/dashboard' && method === 'GET') {
       if (requireLogin(res, user)) return;
+       try { db = openUdb(user.id); } catch(e) { console.error('[dashboard] db init failed:', e.message); return sendJson(res, 500, { error: 'Database init failed' }); }
       var storeCount = db.prepare('SELECT COUNT(*) as cnt FROM reg.stores WHERE is_active = 1').get().cnt;
       var storesByType = db.prepare('SELECT type, COUNT(*) as cnt FROM reg.stores WHERE is_active = 1 GROUP BY type').all();
       var totalOrders = 0, pendingOrders = 0, paidOrders = 0, unpaidOrders = 0, totalRevenue = 0, totalSubtotal = 0, totalTax = 0, totalDiscount = 0, reviewCount = 0, avgRating = 0, menuItemCount = 0, categoryCount = 0;
