@@ -376,7 +376,15 @@ function handleEcosystem(req, res, user) {
       var allMods = db.prepare('SELECT * FROM reg.user_modules WHERE user_id = ? AND enabled = 1').all(body.user_id);
       return json(res, 200, { ok: true, modules: allMods });
     }
+ function findGymStore(storeId) {
+    if (!db) return null;
+    if (storeId) return getStore(storeId);
+    try { return db.prepare('SELECT * FROM reg.stores WHERE type = ? AND is_active = 1 ORDER BY created_at LIMIT 1').get('gym') || null; } catch(e){ return null; }
+  }
 
+  if (user && user.id) {
+    try { db = openUdb(user.id); } catch(e) { console.error('[handleEcosystem] db init failed for user', user.id, e.message); }
+  }
     // ============ DASHBOARD AGGREGATE ============
     if (urlPath === '/api/ecosystem/dashboard' && method === 'GET') {
       if (requireLogin(res, user)) return;
