@@ -267,13 +267,18 @@ const requested = req.url === "/" ? "/index.html" : req.url;
 
   const filePath = resolveFilePath(requested);
 
-  if (!filePath) {
-    // Never return 404 — redirect to login instead
-    // This prevents Edge from caching stale "Not found" responses
+if (!filePath) {
+    // API requests should NEVER redirect — always return JSON 404
+    if (urlPath.startsWith("/api/")) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Not found", path: urlPath }));
+      return;
+    }
+    // Non-API pages: redirect to login as before
     res.writeHead(302, { "Location": "/login" });
     res.end();
     return;
-  }
+}
 
   const ext = path.extname(filePath).toLowerCase();
 
