@@ -702,86 +702,51 @@ if (type) {
     }
 
     // ============ ORDERS ============
-        if (urlPath.match(/^\/api\/ecosystem\/stores\/[^/]+\/orders$/) && method === 'POST') {
-      var storeId = urlPath.split('/')[4];
-      var store = switchToStoreOwner(storeId);
-      if (!store) return json(res, 404, { error: 'Store not found.' });
-      if (!store.ordering_enabled) return json(res, 403, { error: 'Online ordering is disabled.' });
-      if (!body.items || !body.items.length) return json(res, 400, { error: 'Order must have at least one item.' });
-      var orderId = 'ord_' + generateId();
-      var subtotal = 0;
-      body.items.forEach(function(item) { subtotal += Number(item.price || 0) * Number(item.qty || 1); });
-      var taxRate = Number(body.tax_rate || 0);
-      var discount = Number(body.discount || 0);
-      var serviceAmount = Number(body.service_amount || 0);
-      var tax = body.tax_amount !== undefined ? Number(body.tax_amount) : (subtotal * taxRate / 100);
-      var combinedTax = tax + serviceAmount;
-      var total = body.total !== undefined ? Number(body.total) : (subtotal - discount + combinedTax);
-      var noteFinal = String(body.note || '');
-      if (body.tip) noteFinal = '[tip:' + Number(body.tip).toFixed(2) + '] ' + noteFinal;
-      if (serviceAmount > 0) noteFinal = '[service:' + serviceAmount.toFixed(2) + '] ' + noteFinal;
+      if (urlPath.match(/^\/api\/ecosystem\/stores\/[^/]+\/orders$/) && method === 'POST') {
+  var storeId = urlPath.split('/')[4];
+  var store = switchToStoreOwner(storeId);
+  if (!store) return json(res, 404, { error: 'Store not found.' });
+  if (!store.ordering_enabled) return json(res, 403, { error: 'Online ordering is disabled.' });
+  if (!body.items || !body.items.length) return json(res, 400, { error: 'Order must have at least one item.' });
+  var orderId = 'ord_' + generateId();
+  var subtotal = 0;
+  body.items.forEach(function(item) { subtotal += Number(item.price || 0) * Number(item.qty || 1); });
+  var taxRate = Number(body.tax_rate || 0);
+  var discount = Number(body.discount || 0);
+  var serviceAmount = Number(body.service_amount || 0);
+  var tax = body.tax_amount !== undefined ? Number(body.tax_amount) : (subtotal * taxRate / 100);
+  var combinedTax = tax + serviceAmount;
+  var total = body.total !== undefined ? Number(body.total) : (subtotal - discount + combinedTax);
+  var noteFinal = String(body.note || '');
+  if (body.tip) noteFinal = '[tip:' + Number(body.tip).toFixed(2) + '] ' + noteFinal;
+  if (serviceAmount > 0) noteFinal = '[service:' + serviceAmount.toFixed(2) + '] ' + noteFinal;
+  var staffNameVal = String(body.staff_name || '');
+  var customerNameVal = String(body.customer_name || '');
 
-      db.prepare('INSERT INTO store_orders (id, store_id, table_number, customer_name, customer_phone, customer_email, order_type, status, subtotal, tax, discount, total, note, payment_method, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(orderId, storeId, body.table_number || '', body.customer_name || 'Guest', body.customer_phone || '', body.customer_email || '', body.order_type || 'dine_in', body.status || 'pending', subtotal, combinedTax, discount, total, noteFinal, body.payment_method || 'cash', body.payment_status || 'unpaid');
+  db.prepare('INSERT INTO store_orders (id, store_id, table_number, customer_name, customer_phone, customer_email, staff_name, order_type, status, subtotal, tax, discount, total, note, payment_method, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(orderId, storeId, body.table_number || '', customerNameVal, body.customer_phone || '', body.customer_email || '', staffNameVal, body.order_type || 'dine_in', body.status || 'pending', subtotal, combinedTax, discount, total, noteFinal, body.payment_method || 'cash', body.payment_status || 'unpaid');
 
-      var insertItem = db.prepare('INSERT INTO order_items (id, order_id, menu_item_id, name, price, qty, note) VALUES (?, ?, ?, ?, ?, ?, ?)');
-      body.items.forEach(function(item) {
-        insertItem.run('oi_' + generateId(), orderId, item.menu_item_id || null, item.name, item.price || 0, item.qty || 1, item.note || '');
-      });
+  var insertItem = db.prepare('INSERT INTO order_items (id, order_id, menu_item_id, name, price, qty, note) VALUES (?, ?, ?, ?, ?, ?, ?)');
+  body.items.forEach(function(item) {
+    insertItem.run('oi_' + generateId(), orderId, item.menu_item_id || null, item.name, item.price || 0, item.qty || 1, item.note || '');
+  });
 
-      var order = db.prepare('SELECT * FROM store_orders WHERE id = ?').get(orderId);
-      order.items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(orderId);
+  var order = db.prepare('SELECT * FROM store_orders WHERE id = ?').get(orderId);
+  order.items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(orderId);
 
-      if (!body.skip_notifications) {
-        queueMessage(db, storeId, 'whatsapp', store.whatsapp_number || store.phone || '', 'New order #' + orderId.slice(-6).toUpperCase() + ' from ' + order.customer_name + '.', 'order', orderId);
-        if (body.customer_phone) queueMessage(db, storeId, 'whatsapp', body.customer_phone, 'Your order at ' + store.name + ' was received. Order #' + orderId.slice(-6).toUpperCase() + '.', 'order', orderId);
-      }
+  if (!body.skip_notifications) {
+    queueMessage(db, storeId, 'whatsapp', store.whatsapp_number || store.phone || '', 'New order #' + orderId.slice(-6).toUpperCase() + ' from ' + (order.customer_name || order.staff_name || 'Customer') + '.', 'order', orderId);
+    if (body.customer_phone) queueMessage(db, storeId, 'whatsapp', body.customer_phone, 'Your order at ' + store.name + ' was received. Order #' + orderId.slice(-6).toUpperCase() + '.', 'order', orderId);
+  }
 
-      if (order.customer_email) {
-        var orderItemsHtml = (order.items || []).map(function(it) {
-          return '<tr><td style="padding:4px 0;">' + (it.name || '') + ' × ' + (it.qty || 1) + '</td><td style="padding:4px 0;text-align:right;">' + Number(it.price || 0).toFixed(2) + '</td></tr>';
-        }).join('');
-        sendConfirmationEmail(order.customer_email, 'Order Confirmed ✅ — ' + (store.name || 'Ocean SFT'), emailTemplates.orderConfirmationEmail(store.name, order.customer_name, orderItemsHtml, Number(order.total || 0) + ' ' + (store.currency || ''), order.id));
-      }
-      return json(res, 201, { ok: true, order: order });
-    }
-
-    if (urlPath.match(/^\/api\/ecosystem\/stores\/[^/]+\/orders$/) && method === 'GET') {
-      var storeId = urlPath.split('/')[4];
-      var store = db.prepare('SELECT * FROM reg.stores WHERE id = ?').get(storeId);
-      if (!store) return json(res, 404, { error: 'Store not found.' });
-      if (requireStoreOwner(res, user, store)) return;
-      var status = '';
-      try { var u = new URL(req.url, 'http://localhost'); status = u.searchParams.get('status') || ''; } catch(e) {}
-      var orders;
-      if (status) {
-        orders = db.prepare('SELECT * FROM store_orders WHERE store_id = ? AND status = ? ORDER BY created_at DESC').all(storeId, status);
-      } else {
-        orders = db.prepare('SELECT * FROM store_orders WHERE store_id = ? ORDER BY created_at DESC').all(storeId);
-      }
-      orders.forEach(function(o) {
-        o.items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(o.id);
-      });
-      return json(res, 200, { ok: true, orders: orders });
-    }
-
-    if (urlPath.match(/^\/api\/ecosystem\/orders\/[^/]+$/) && method === 'PATCH') {
-      var orderId = urlPath.split('/').pop();
-      var order = scanOne('SELECT o.* FROM store_orders o WHERE o.id = ?', [orderId]);
-      if (!order) return json(res, 404, { error: 'Order not found.' });
-      var orderStore = getStore(order.store_id);
-      if (requireStoreOwner(res, user, orderStore)) return;
-      switchToStoreOwner(order.store_id);
-      if (body.status) order.status = body.status;
-      if (body.payment_status) order.payment_status = body.payment_status;
-      db.prepare('UPDATE store_orders SET status=?, payment_status=?, updated_at=datetime(\'now\') WHERE id=?').run(order.status, order.payment_status, orderId);
-      if (order.customer_phone) queueMessage(db, order.store_id, 'whatsapp', order.customer_phone, 'Your order at ' + (orderStore && orderStore.name) + ' is now ' + order.status + '.', 'order', orderId);
-      if (order.customer_email) {
-        try { sendEmail(order.customer_email, 'Order Update - ' + (orderStore && orderStore.name || 'Ocean SFT'), emailTemplates.notificationEmail('Order Update', 'Your order #' + orderId.slice(-6).toUpperCase() + ' at ' + (orderStore && orderStore.name || 'our store') + ' is now <strong>' + order.status + '</strong>.')).catch(function(){}); } catch(e){}
-      }
-      order.items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(orderId);
-      return json(res, 200, { ok: true, order: order });
-    }
+  if (order.customer_email) {
+    var orderItemsHtml = (order.items || []).map(function(it) {
+      return '<tr><td style="padding:4px 0;">' + (it.name || '') + ' × ' + (it.qty || 1) + '</td><td style="padding:4px 0;text-align:right;">' + Number(it.price || 0).toFixed(2) + '</td></tr>';
+    }).join('');
+    sendConfirmationEmail(order.customer_email, 'Order Confirmed ✅ — ' + (store.name || 'Ocean SFT'), emailTemplates.orderConfirmationEmail(store.name, (order.customer_name || order.staff_name || 'Customer'), orderItemsHtml, Number(order.total || 0) + ' ' + (store.currency || ''), order.id));
+  }
+  return json(res, 201, { ok: true, order: order });
+}
 
     // ============ BOOKINGS ============
     if (urlPath.match(/^\/api\/ecosystem\/stores\/[^/]+\/bookings$/) && method === 'POST') {
