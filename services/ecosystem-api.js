@@ -745,8 +745,20 @@ if (type) {
     }).join('');
     sendConfirmationEmail(order.customer_email, 'Order Confirmed ✅ — ' + (store.name || 'Ocean SFT'), emailTemplates.orderConfirmationEmail(store.name, (order.customer_name || order.staff_name || 'Customer'), orderItemsHtml, Number(order.total || 0) + ' ' + (store.currency || ''), order.id));
   }
-  return json(res, 201, { ok: true, order: order });
+   return json(res, 201, { ok: true, order: order });
 }
+
+    if (urlPath.match(/^\/api\/ecosystem\/stores\/[^/]+\/orders$/) && method === 'GET') {
+      var ordersStoreId = urlPath.split('/')[4];
+      var ordersStore = switchToStoreOwner(ordersStoreId);
+      if (!ordersStore) return json(res, 404, { error: 'Store not found.' });
+      if (requireStoreOwner(res, user, ordersStore)) return;
+      var orderRows = db.prepare('SELECT * FROM store_orders WHERE store_id = ? ORDER BY created_at DESC').all(ordersStoreId);
+      orderRows.forEach(function(orderRow) {
+        orderRow.items = db.prepare('SELECT * FROM order_items WHERE order_id = ? ORDER BY rowid ASC').all(orderRow.id);
+      });
+      return json(res, 200, { ok: true, orders: orderRows });
+    }
 
     // ============ BOOKINGS ============
     if (urlPath.match(/^\/api\/ecosystem\/stores\/[^/]+\/bookings$/) && method === 'POST') {
