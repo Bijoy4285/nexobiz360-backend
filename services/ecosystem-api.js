@@ -395,57 +395,79 @@ function handleEcosystem(req, res, user) {
     // ============ DASHBOARD AGGREGATE ============
     if (urlPath === '/api/ecosystem/dashboard' && method === 'GET') {
       if (requireLogin(res, user)) return;
-       try { db = openUdb(user.id); } catch(e) { console.error('[dashboard] db init failed:', e.message); return sendJson(res, 500, { error: 'Database init failed' }); }
-      var storeCount = db.prepare('SELECT COUNT(*) as cnt FROM reg.stores WHERE is_active = 1').get().cnt;
-      var storesByType = db.prepare('SELECT type, COUNT(*) as cnt FROM reg.stores WHERE is_active = 1 GROUP BY type').all();
-      var totalOrders = 0, pendingOrders = 0, paidOrders = 0, unpaidOrders = 0, totalRevenue = 0, totalSubtotal = 0, totalTax = 0, totalDiscount = 0, reviewCount = 0, avgRating = 0, menuItemCount = 0, categoryCount = 0;
-      var recentOrders = [], recentReviews = [], ordersByStatus = {}, ratingDistribution = {};
-      openOwnerDbs().forEach(function(udb){
+      try { db = openUdb(user.id); } catch(e) { console.error('[dashboard] db init failed:', e.message); return json(res, 500, { error: 'Database init failed' }); }
+      var dashStores = [];
+      if (user.isAdmin) {
+        dashStores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1').all();
+      } else {
+        dashStores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 AND owner_id = ?').all(ownerId(user));
+      }
+      var storeCount = dashStores.length;
+      var typeCounts = {};
+      var storeNameById = {};
+      var storeTypeById = {};
+      var storeIdsByOwner = {};
+      dashStores.forEach(function(s) {
+        typeCounts[s.type] = (typeCounts[s.type] || 0) + 1;
+        storeNameById[s.id] = s.name;
+        storeTypeById[s.id] = s.type;
+        var oid = String(s.owner_id || '');
+        if (!storeIdsByOwner[oid]) storeIdsByOwner[oid] = [];
+        storeIdsByOwner[oid].push(s.id);
+      });
+      var storesByType = Object.keys(typeCounts).map(function(k) { return { type: k, cnt: typeCounts[k] }; });
+      var totalOrders = 0, pendingOrders = 0, paidOrders = 0, unpaidOrders = 0, totalRevenue = 0, totalSubtotal = 0, totalTax = 0, totalDiscount = 0, reviewCount = 0, ratingSum = 0, menuItemCount = 0, categoryCount = 0;
+      var recentOrders = [], recentReviews = [], ordersByStatus = {}, ratingDistribution = {}, revenueByStore = [];
+      Object.keys(storeIdsByOwner).forEach(function(oid) {
+        var sids = storeIdsByOwner[oid];
+        var ph = sids.map(function() { return '?'; }).join(',');
+        var scope = ' WHERE store_id IN (' + ph + ')';
+        var udb = null;
+        try { udb = openUdb(oid); } catch(e) { return; }
+        var one = function(sql, params, fallback) { try { var st = udb.prepare(sql); return st.get.apply(st, params) || fallback; } catch(e) { return fallback; } };
+        var many = function(sql, params) { try { var st = udb.prepare(sql); return st.all.apply(st, params); } catch(e) { return []; } };
         try {
-          totalOrders += udb.prepare('SELECT COUNT(*) as cnt FROM store_orders').get().cnt || 0;
-          pendingOrders += udb.prepare('SELECT COUNT(*) as cnt FROM store_orders WHERE status = \'pending\'').get().cnt || 0;
-          paidOrders += udb.prepare('SELECT COUNT(*) as cnt FROM store_orders WHERE payment_status = \'paid\'').get().cnt || 0;
-          unpaidOrders += udb.prepare('SELECT COUNT(*) as cnt FROM store_orders WHERE payment_status = \'unpaid\'').get().cnt || 0;
-          var rev = udb.prepare('SELECT COALESCE(SUM(total),0) as tr, COALESCE(SUM(subtotal),0) as ts, COALESCE(SUM(tax),0) as tt, COALESCE(SUM(discount),0) as td FROM store_orders').get();
-          totalRevenue += Number(rev.tr || 0); totalSubtotal += Number(rev.ts || 0); totalTax += Number(rev.tt || 0); totalDiscount += Number(rev.td || 0);
-          reviewCount += udb.prepare('SELECT COUNT(*) as cnt FROM store_reviews WHERE is_approved = 1').get().cnt || 0;
-          var ar = udb.prepare('SELECT COALESCE(AVG(rating),0) as avg FROM store_reviews WHERE is_approved = 1').get().avg || 0;
-          avgRating += Number(ar);
-          menuItemCount += udb.prepare('SELECT COUNT(*) as cnt FROM menu_items WHERE is_available = 1').get().cnt || 0;
-          categoryCount += udb.prepare('SELECT COUNT(*) as cnt FROM menu_categories').get().cnt || 0;
-          var byStatus = udb.prepare('SELECT status, COUNT(*) as cnt FROM store_orders GROUP BY status').all();
-          byStatus.forEach(function(r){ ordersByStatus[r.status] = (ordersByStatus[r.status] || 0) + r.cnt; });
-          var dist = udb.prepare('SELECT rating, COUNT(*) as cnt FROM store_reviews WHERE is_approved = 1 GROUP BY rating').all();
-          dist.forEach(function(r){ ratingDistribution[r.rating] = (ratingDistribution[r.rating] || 0) + r.cnt; });
-          recentOrders = recentOrders.concat(udb.prepare('SELECT o.* FROM store_orders o ORDER BY o.created_at DESC LIMIT 10').all());
-          recentReviews = recentReviews.concat(udb.prepare('SELECT r.* FROM store_reviews r WHERE r.is_approved = 1 ORDER BY r.created_at DESC LIMIT 10').all());
-        } catch(e) {}
-        udb.close();
+          totalOrders += Number(one('SELECT COUNT(*) as cnt FROM store_orders' + scope, sids, {}).cnt || 0);
+          pendingOrders += Number(one('SELECT COUNT(*) as cnt FROM store_orders' + scope + " AND status = 'pending'", sids, {}).cnt || 0);
+          paidOrders += Number(one('SELECT COUNT(*) as cnt FROM store_orders' + scope + " AND payment_status = 'paid'", sids, {}).cnt || 0);
+          unpaidOrders += Number(one('SELECT COUNT(*) as cnt FROM store_orders' + scope + " AND payment_status = 'unpaid'", sids, {}).cnt || 0);
+          var rev = one('SELECT COALESCE(SUM(total),0) as tr, COALESCE(SUM(subtotal),0) as ts, COALESCE(SUM(tax),0) as tt, COALESCE(SUM(discount),0) as td FROM store_orders' + scope, sids, {});
+          totalRevenue += Number(rev.tr || 0);
+          totalSubtotal += Number(rev.ts || 0);
+          totalTax += Number(rev.tt || 0);
+          totalDiscount += Number(rev.td || 0);
+          var rv = one('SELECT COUNT(*) as cnt, COALESCE(SUM(rating),0) as sm FROM store_reviews' + scope + ' AND is_approved = 1', sids, {});
+          reviewCount += Number(rv.cnt || 0);
+          ratingSum += Number(rv.sm || 0);
+          menuItemCount += Number(one('SELECT COUNT(*) as cnt FROM menu_items' + scope + ' AND is_available = 1', sids, {}).cnt || 0);
+          categoryCount += Number(one('SELECT COUNT(*) as cnt FROM menu_categories' + scope, sids, {}).cnt || 0);
+          many('SELECT status, COUNT(*) as cnt FROM store_orders' + scope + ' GROUP BY status', sids).forEach(function(r) {
+            ordersByStatus[r.status] = (ordersByStatus[r.status] || 0) + r.cnt;
+          });
+          many('SELECT rating, COUNT(*) as cnt FROM store_reviews' + scope + ' AND is_approved = 1 GROUP BY rating', sids).forEach(function(r) {
+            ratingDistribution[r.rating] = (ratingDistribution[r.rating] || 0) + r.cnt;
+          });
+          var ro = many('SELECT * FROM store_orders' + scope + ' ORDER BY created_at DESC LIMIT 10', sids);
+          ro.forEach(function(o) {
+            o.store_name = storeNameById[o.store_id] || '';
+            o.items = many('SELECT * FROM order_items WHERE order_id = ?', [o.id]);
+          });
+          recentOrders = recentOrders.concat(ro);
+          var rr = many('SELECT * FROM store_reviews' + scope + ' AND is_approved = 1 ORDER BY created_at DESC LIMIT 10', sids);
+          rr.forEach(function(r) { r.store_name = storeNameById[r.store_id] || ''; });
+          recentReviews = recentReviews.concat(rr);
+          sids.forEach(function(sid) {
+            var sr = one('SELECT COALESCE(SUM(total),0) as revenue, COUNT(*) as cnt FROM store_orders WHERE store_id = ?', [sid], {});
+            revenueByStore.push({ id: sid, name: storeNameById[sid], type: storeTypeById[sid], revenue: Number(sr.revenue || 0), order_count: Number(sr.cnt || 0) });
+          });
+        } finally {
+          try { udb.close(); } catch(e) {}
+        }
       });
       recentOrders = recentOrders.sort(function(a,b){ return String(b.created_at||'').localeCompare(String(a.created_at||'')); }).slice(0, 10);
       recentReviews = recentReviews.sort(function(a,b){ return String(b.created_at||'').localeCompare(String(a.created_at||'')); }).slice(0, 10);
-      recentOrders.forEach(function(o) {
-        o.store_name = (getStore(o.store_id) || {}).name || '';
-        o.items = [];
-        var so = getStore(o.store_id);
-        if (so) {
-          var odb = openUdb(so.owner_id);
-          try { o.items = odb.prepare('SELECT * FROM order_items WHERE order_id = ?').all(o.id); } catch(e){}
-          try { odb.close(); } catch(e){}
-        }
-      });
-      recentReviews.forEach(function(r) {
-        r.store_name = (getStore(r.store_id) || {}).name || '';
-      });
-      var allStores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1').all();
-      var revenueByStore = allStores.map(function(s){
-        var odb = openUdb(s.owner_id);
-        var revenue = 0, orderCount = 0;
-        try { revenue = odb.prepare('SELECT COALESCE(SUM(o.total),0) as revenue FROM store_orders o WHERE o.store_id = ?').get(s.id).revenue || 0; } catch(e){}
-        try { orderCount = odb.prepare('SELECT COUNT(*) as cnt FROM store_orders o WHERE o.store_id = ?').get(s.id).cnt || 0; } catch(e){}
-        try { odb.close(); } catch(e){}
-        return { id: s.id, name: s.name, type: s.type, revenue: revenue, order_count: orderCount };
-      }).sort(function(a,b){ return b.revenue - a.revenue; });
+      revenueByStore.sort(function(a,b){ return b.revenue - a.revenue; });
+      var avgRating = reviewCount > 0 ? ratingSum / reviewCount : 0;
       var distArr = Object.keys(ratingDistribution).map(function(k){ return { rating: Number(k), cnt: ratingDistribution[k] }; }).sort(function(a,b){ return a.rating - b.rating; });
       var statusArr = Object.keys(ordersByStatus).map(function(k){ return { status: k, cnt: ordersByStatus[k] }; });
       return json(res, 200, {
