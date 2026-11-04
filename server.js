@@ -1222,7 +1222,7 @@ if (urlPath === "/api/pharmacy/upload" && req.method === "POST") {
       const ecoDb = require("./lib/ecosystem-db").getDb();
       const store = ecoDb.prepare('SELECT * FROM stores WHERE id = ?').get(body.storeId);
       if (!store) { ecoDb.close(); return json(res, 404, { ok: false, error: "Store not found" }); }
-
+      if (!user.isAdmin && String(store.owner_id || '') !== String(user.id)) { ecoDb.close(); return json(res, 403, { ok: false, error: "Store owner only." }); }
       const approvalId = 'ca_' + Date.now() + '_' + Math.random().toString(36).substr(2, 8);
       const token = coupons.randomToken(24);
       const moduleNames = Array.isArray(body.moduleNames) ? body.moduleNames.join(', ') : (body.moduleNames || '');
@@ -1264,7 +1264,9 @@ if (urlPath === "/api/pharmacy/upload" && req.method === "POST") {
     if (!user) return json(res, 401, { error: "Unauthorized" });
     const storeId = new URL(req.url, 'http://x').searchParams.get('storeId') || '';
     const ecoDb = require("./lib/ecosystem-db").getDb();
-    const row = ecoDb.prepare('SELECT id, status, store_id, email, created_at FROM coupon_approvals WHERE store_id = ? ORDER BY created_at DESC LIMIT 1').get(storeId);
+    const row = user.isAdmin
+      ? ecoDb.prepare('SELECT id, status, store_id, email, created_at FROM coupon_approvals WHERE store_id = ? ORDER BY created_at DESC LIMIT 1').get(storeId)
+      : ecoDb.prepare('SELECT id, status, store_id, email, created_at FROM coupon_approvals WHERE store_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT 1').get(storeId, String(user.id));
     ecoDb.close();
     if (!row) return json(res, 200, { ok: true, status: 'none' });
     return json(res, 200, { ok: true, status: row.status, approvalId: row.id });
@@ -1312,6 +1314,7 @@ if (urlPath === "/api/pharmacy/upload" && req.method === "POST") {
       const ecoDb = require("./lib/ecosystem-db").getDb();
       const store = ecoDb.prepare('SELECT * FROM stores WHERE id = ?').get(storeId);
       if (!store) { ecoDb.close(); return json(res, 404, { ok: false, error: "Store not found." }); }
+      if (!user.isAdmin && String(store.owner_id || '') !== String(user.id)) { ecoDb.close(); return json(res, 403, { ok: false, error: "Store owner only." }); }
 
       // Enable modules
       const upsert = ecoDb.prepare('INSERT INTO user_modules (id, user_id, module_key, enabled, created_at) VALUES (?, ?, ?, 1, datetime(\'now\')) ON CONFLICT(user_id, module_key) DO UPDATE SET enabled=1');
