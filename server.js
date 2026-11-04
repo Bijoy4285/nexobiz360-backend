@@ -1303,6 +1303,18 @@ if (urlPath === "/api/pharmacy/upload" && req.method === "POST") {
 
   // Self-service free trial: instant 1-month access, no admin approval needed.
   if (urlPath === "/api/trial/start" && req.method === "POST") {
+    if (user && !user.isAdmin) {
+      let trialUsed = null;
+      try {
+        const trialCheckDb = require("./lib/ecosystem-db").getDb();
+        trialUsed = trialCheckDb.prepare("SELECT id FROM coupon_approvals WHERE user_id = ? AND code = 'self-trial' LIMIT 1").get(String(user.id));
+        trialCheckDb.close();
+      } catch (e) {
+        console.error('Trial check error:', e);
+        return json(res, 500, { ok: false, error: "Failed to start trial." });
+      }
+      if (trialUsed) return json(res, 409, { ok: false, error: "Free trial already used for this account." });
+    }
     if (!user) return json(res, 401, { error: "Unauthorized" });
     try {
       const body = await parseBody(req);
