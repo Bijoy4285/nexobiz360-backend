@@ -1616,7 +1616,7 @@ if (type) {
     // ============ AI GYM INSTRUCTOR ============
     if (urlPath === '/api/ecosystem/gym/trainer' && method === 'POST') {
       if (requireLogin(res, user)) return;
-      var tEmail = String(body.email || user.email || '').trim().toLowerCase();
+var tEmail = (user.isAdmin ? String(body.email || user.email || '') : String(user.email || '')).trim().toLowerCase();
       var tQuery = String(body.query || '').slice(0, 1000);
       var tGoal = String(body.goal || 'general').slice(0, 60);
       var tLevel = String(body.level || 'beginner').slice(0, 30);
