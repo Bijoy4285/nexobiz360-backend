@@ -2055,13 +2055,13 @@ if (urlPath === "/api/pharmacy/upload" && req.method === "POST") {
 
   if (urlPath === "/api/whatsapp/messages" && req.method === "GET") {
     if (!user) return json(res, 401, { error: "Unauthorized" });
-    const messages = (db.whatsapp_messages || []).slice(0, 200);
+    const messages = requireAdmin(user) ? (db.whatsapp_messages || []).slice(0, 200) : [];
     return json(res, 200, { ok: true, messages });
   }
 
   if (urlPath === "/api/whatsapp/broadcast-log" && req.method === "GET") {
     if (!user) return json(res, 401, { error: "Unauthorized" });
-    const log = (db.whatsapp_broadcast_log || []).slice(0, 200);
+    const log = requireAdmin(user) ? (db.whatsapp_broadcast_log || []).slice(0, 200) : [];
     return json(res, 200, { ok: true, log });
   }
 
@@ -2134,16 +2134,19 @@ const body = await parseBody(req);
     }
   }
 
-  if (urlPath.startsWith("/api/admin/users/") && req.method === "DELETE") {
+   if (urlPath.startsWith("/api/admin/users/") && req.method === "DELETE") {
     if (!requireAdmin(user)) return json(res, 403, { error: "Admin only." });
     const userId = urlPath.split("/").filter(Boolean)[3];
+    const deleteTarget = db.users.find(item => item.id === userId);
+    if (!deleteTarget) return json(res, 404, { error: "User not found." });
+    if (deleteTarget.isAdmin || isAdminEmail(deleteTarget.email)) return json(res, 403, { error: "Admin accounts cannot be deleted." });
+    if (String(deleteTarget.id) === String(user.id)) return json(res, 403, { error: "You cannot delete your own account." });
     db.users = db.users.filter(item => item.id !== userId);
     db.sessions = db.sessions.filter(item => item.userId !== userId);
     delete db.storage[userId];
     writeDb(db);
     return json(res, 200, { ok: true });
   }
-
   // Ecosystem API routes (stores, menu, orders, reviews)
   if (urlPath.startsWith('/api/ecosystem/')) {
     if (!ECO_SQLITE_OK) {
