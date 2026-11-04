@@ -181,7 +181,7 @@ function verifyWebhookSignature(req) {
   const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN || "ocean-sft-verify";
   let param = "";
   try { param = new URL(req.url, "http://localhost").searchParams.get("verify_token") || ""; } catch (e) {}
-  return param === verifyToken;
+ return Boolean(process.env.WHATSAPP_VERIFY_TOKEN) && param === process.env.WHATSAPP_VERIFY_TOKEN;
 }
 
 async function bootDb() {
@@ -232,7 +232,7 @@ function resolveFilePath(urlPath) {
   cleaned = path.normalize(cleaned);
   cleaned = cleaned.replace(/^[/\\]+/, "");
 
-if (!PUBLIC_FILES.has(cleaned) && !PUBLIC_FILES.has(cleaned + ".html")) {
+if (cleaned === ".env.example" || cleaned === ".firebaserc" || cleaned === "backend-status.txt" || (!PUBLIC_FILES.has(cleaned) && !PUBLIC_FILES.has(cleaned + ".html"))) {
     return null;
   }
 
@@ -501,7 +501,8 @@ res.setHeader("Access-Control-Allow-Credentials", "true");
       if (password.length < 6) return json(res, 400, { error: "Password must be at least 6 characters." });
       if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json(res, 400, { error: "Invalid email address." });
       if (phone && !/^[+]?[\d\s()-]{7,20}$/.test(phone)) return json(res, 400, { error: "Invalid phone number." });
-      if (db.users.some(item => item.email && item.email === email)) return json(res, 409, { error: "Email already registered." });
+if (db.users.some(item => item.email && item.email === email)) return json(res, 409, { error: "Email already registered." });
+      if (email && isAdminEmail(email)) return json(res, 403, { error: "This email address is reserved." });
       if (phone && db.users.some(item => item.phone && item.phone === phone)) return json(res, 409, { error: "Phone number already registered." });
       const next = makeUser(company, email, phone, country, password, false);
       db.users.push(next);
@@ -704,7 +705,8 @@ sendEmail(
       if (!credential) return json(res, 400, { error: "A valid Google credential is required." });
 
       const info = await verifyGoogleToken(credential);
-      if (!info || !info.email) return json(res, 401, { error: "Invalid Google credential." });
+if (!info || !info.email) return json(res, 401, { error: "Invalid Google credential." });
+      if (info.email_verified === false || info.email_verified === "false") return json(res, 401, { error: "Google email is not verified." });
       // Firebase ID tokens identify the token by projectId (info.aud === projectId);
       // Google OAuth tokens identify it by an OAuth web-client id. Only enforce the
       // OAuth audience check for the non-Firebase (tokeninfo) path.
@@ -1232,7 +1234,7 @@ if (urlPath === "/api/pharmacy/upload" && req.method === "POST") {
       ecoDb.prepare('INSERT INTO coupon_approvals (id, store_id, user_id, email, code, months, modules, module_names, amount, token, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \'pending\', datetime(\'now\'))')
         .run(approvalId, store.id, user.id, user.email, resolved.code, resolved.months, JSON.stringify(body.modules), moduleNames, Number(body.amount) || 0, token);
 
-      const baseUrl = (req.headers['x-forwarded-proto'] || 'http') + '://' + (req.headers.host || 'localhost:3000');
+     const baseUrl = process.env.API_BASE_URL || "https://nexobiz360-api.onrender.com";
       const approveUrl = baseUrl + '/api/coupons/approve/' + approvalId + '?t=' + token;
       const rejectUrl = baseUrl + '/api/coupons/reject/' + approvalId + '?t=' + token;
       const adminEmail = process.env.ADMIN_EMAIL || "";
@@ -1318,7 +1320,7 @@ if (urlPath === "/api/pharmacy/upload" && req.method === "POST") {
     if (!user) return json(res, 401, { error: "Unauthorized" });
     try {
       const body = await parseBody(req);
-      const modules = Array.isArray(body.modules) ? body.modules : [];
+const modules = (Array.isArray(body.modules) ? body.modules : []).map(function (m) { return String(m || "").trim().toLowerCase(); }).filter(function (m) { return /^[a-z0-9_-]{1,40}$/.test(m); }).slice(0, 40);
       const storeId = String(body.storeId || "").trim();
       if (modules.length === 0) return json(res, 400, { ok: false, error: "At least one module is required." });
       if (!storeId) return json(res, 400, { ok: false, error: "storeId is required." });
@@ -1501,7 +1503,9 @@ if (urlPath === "/api/pharmacy/upload" && req.method === "POST") {
 
       const ecoDb = require("./lib/ecosystem-db").getDb();
       const paymentId = 'pay_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-      const storeName = storeId ? (ecoDb.prepare('SELECT name FROM stores WHERE id = ?').get(storeId) || {}).name : '';
+const storeRowChk = storeId ? ecoDb.prepare('SELECT name, owner_id FROM stores WHERE id = ?').get(storeId) : null;
+      if (storeRowChk && !user.isAdmin && String(storeRowChk.owner_id || '') !== String(user.id)) { ecoDb.close(); return json(res, 403, { error: "Store owner only." }); }
+      const storeName = storeRowChk ? storeRowChk.name : '';
       ecoDb.prepare('INSERT INTO payments (id, user_id, email, modules, module_names, amount, currency, bkash_number, transaction_id, screenshot, status, store_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))')
         .run(paymentId, user.id, user.email, JSON.stringify(modules), JSON.stringify(body.moduleNames || []), amount || 0, currency || 'TK', bkashNumber || '01876578110', transactionId, screenshot || '', 'pending', storeId || '');
       ecoDb.close();
@@ -1722,7 +1726,7 @@ if (urlPath === "/api/pharmacy/upload" && req.method === "POST") {
 
       // If linked to a store, activate it so it goes live on locator/website
       if (payment.store_id) {
-        ecoDb.prepare('UPDATE stores SET is_active = 1, website_published = 1, updated_at = datetime(\'now\') WHERE id = ?').run(payment.store_id);
+        ecoDb.prepare('UPDATE stores SET is_active = 1, website_published = 1, updated_at = datetime(\'now\')WHERE id = ? AND (owner_id = ? OR lower(owner_id) = lower(?))').run(payment.store_id, String(payment.user_id), String(payment.email || ''));
       }
       ecoDb.close();
 
@@ -2025,7 +2029,7 @@ if (urlPath === "/api/pharmacy/upload" && req.method === "POST") {
       const mode = url.searchParams.get("hub.mode");
       const token = url.searchParams.get("hub.verify_token");
       const challenge = url.searchParams.get("hub.challenge");
-      if (mode === "subscribe" && token === verifyToken) {
+if (process.env.WHATSAPP_VERIFY_TOKEN && mode === "subscribe" && token === verifyToken) {
         res.writeHead(200, { "Content-Type": "text/plain" });
         res.end(challenge);
         return;
