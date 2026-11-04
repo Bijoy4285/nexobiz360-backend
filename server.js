@@ -130,6 +130,11 @@ function rateLimited(ip, key) {
   return false;
 }
 
+function clientIp(req) {
+  const xff = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  return xff || req.socket.remoteAddress || "unknown";
+}
+
 function verifyGoogleToken(credential) {
   const projectId = process.env.FIREBASE_PROJECT_ID || "ocensft";
   return new Promise((resolve) => {
@@ -524,7 +529,7 @@ if (db.users.some(item => item.email && item.email === email)) return json(res, 
   if (urlPath === "/api/auth/login" && req.method === "POST") {
     try {
       const ip = req.socket.remoteAddress || "unknown";
-      if (rateLimited(ip, "login")) return json(res, 429, { error: "Too many login attempts. Try again later." });
+      if (rateLimited(clientIp(req), "login")) return json(res, 429, { error: "Too many login attempts. Try again later." });
       const body = await parseBody(req);
       const email = String(body.email || "").trim().toLowerCase();
       const phone = String(body.phone || "").trim();
@@ -556,7 +561,7 @@ if (urlPath === "/api/auth/logout" && req.method === "POST") {
   if (urlPath === "/api/auth/forgot-password" && req.method === "POST") {
     try {
       const ip = req.socket.remoteAddress || "unknown";
-      if (rateLimited(ip, "forgot-password")) {
+      if (rateLimited(clientIp(req), "forgot-password")) {
         return json(res, 429, { error: "Too many requests. Please try again later." });
       }
       const body = await parseBody(req);
@@ -599,7 +604,7 @@ sendEmail(
   if (urlPath === "/api/auth/reset-password" && req.method === "POST") {
     try {
       const ip = req.socket.remoteAddress || "unknown";
-      if (rateLimited(ip, "reset-password")) {
+      if (rateLimited(clientIp(req), "reset-password")) {
         return json(res, 429, { error: "Too many attempts. Please try again later." });
       }
       const body = await parseBody(req);
@@ -697,7 +702,7 @@ sendEmail(
   if (urlPath === "/api/auth/google" && req.method === "POST") {
     try {
       const ip = req.socket.remoteAddress || "unknown";
-      if (rateLimited(ip, "google")) return json(res, 429, { error: "Too many attempts. Try again later." });
+      if (rateLimited(clientIp(req), "google")) return json(res, 429, { error: "Too many attempts. Try again later." });
       const body = await parseBody(req);
       const credential = String(body.credential || "").trim();
       // A valid Google ID token is REQUIRED for both login and signup.
@@ -1370,7 +1375,14 @@ const modules = (Array.isArray(body.modules) ? body.modules : []).map(function (
   }
 
   // Email-link approval (GET, no session) — opens in the admin's browser.
-  if (urlPath.match(/^\/api\/coupons\/approve\/[^/]+$/) && req.method === "GET") {
+if (urlPath.match(/^\/api\/coupons\/approve\/[^/]+$/) && (req.method === "GET" || req.method === "POST")) {
+    if (req.method === "GET") {
+      const cfId = urlPath.split('/').pop();
+      const cfToken = new URL(req.url, 'http://x').searchParams.get('t') || '';
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end('<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Free Trial</title></head><body style="font-family:Arial,Helvetica,sans-serif;background:#f1f5f9;margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;"><div style="background:#fff;border-radius:16px;padding:40px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,.08);max-width:420px;"><h2 style="color:#0f1e3d;margin:0 0 16px;">Approve this free trial?</h2><form method="POST" action="/api/coupons/approve/' + encodeURIComponent(cfId) + '?t=' + encodeURIComponent(cfToken) + '"><button type="submit" style="background:#16a34a;color:#fff;border:0;border-radius:10px;padding:12px 28px;font-size:15px;cursor:pointer;">Approve Free Trial</button></form></div></body></html>');
+      return;
+    }
     const approvalId = urlPath.split('/').pop();
     const token = new URL(req.url, 'http://x').searchParams.get('t') || '';
     const ecoDb = require("./lib/ecosystem-db").getDb();
@@ -1397,7 +1409,14 @@ const modules = (Array.isArray(body.modules) ? body.modules : []).map(function (
   }
 
   // Email-link rejection (GET, no session).
-  if (urlPath.match(/^\/api\/coupons\/reject\/[^/]+$/) && req.method === "GET") {
+if (urlPath.match(/^\/api\/coupons\/reject\/[^/]+$/) && (req.method === "GET" || req.method === "POST")) {
+    if (req.method === "GET") {
+      const cfId = urlPath.split('/').pop();
+      const cfToken = new URL(req.url, 'http://x').searchParams.get('t') || '';
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end('<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Free Trial</title></head><body style="font-family:Arial,Helvetica,sans-serif;background:#f1f5f9;margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;"><div style="background:#fff;border-radius:16px;padding:40px;text-align:center;box-shadow:0 10px 30px rgba(0,0,0,.08);max-width:420px;"><h2 style="color:#0f1e3d;margin:0 0 16px;">Reject this free trial request?</h2><form method="POST" action="/api/coupons/reject/' + encodeURIComponent(cfId) + '?t=' + encodeURIComponent(cfToken) + '"><button type="submit" style="background:#dc2626;color:#fff;border:0;border-radius:10px;padding:12px 28px;font-size:15px;cursor:pointer;">Reject Request</button></form></div></body></html>');
+      return;
+    }
     const approvalId = urlPath.split('/').pop();
     const token = new URL(req.url, 'http://x').searchParams.get('t') || '';
     const ecoDb = require("./lib/ecosystem-db").getDb();
