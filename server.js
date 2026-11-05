@@ -711,7 +711,7 @@ targetUser.passwordHash = createPasswordHash(newPassword, targetUser.salt);
 
       const info = await verifyGoogleToken(credential);
 if (!info || !info.email) return json(res, 401, { error: "Invalid Google credential." });
-      if (info.email_verified === false || info.email_verified === "false") return json(res, 401, { error: "Google email is not verified." });
+if (!(info.email_verified === true || info.email_verified === "true")) return json(res, 401, { error: "Google email is not verified." });
       // Firebase ID tokens identify the token by projectId (info.aud === projectId);
       // Google OAuth tokens identify it by an OAuth web-client id. Only enforce the
       // OAuth audience check for the non-Firebase (tokeninfo) path.
