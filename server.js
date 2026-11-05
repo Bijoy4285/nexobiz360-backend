@@ -622,8 +622,8 @@ sendEmail(
       if (!targetUser) return json(res, 404, { error: "Account not found." });
 
       targetUser.salt = require("crypto").randomBytes(16).toString("hex");
-      targetUser.passwordHash = createPasswordHash(newPassword, targetUser.salt);
-
+targetUser.passwordHash = createPasswordHash(newPassword, targetUser.salt);
+      targetUser.emailVerified = true;
       consumePasswordResetToken(entry);
 
       db.sessions = db.sessions.filter(s => s.userId !== targetUser.id);
@@ -721,9 +721,16 @@ if (!info || !info.email) return json(res, 401, { error: "Invalid Google credent
       const name = String(info.name || email.split("@")[0]).trim();
       const photo = String(info.picture || "").trim();
 
-      let found = db.users.find(item => item.email === email);
+    let found = db.users.find(item => item.email === email);
+      if (found && !found.emailVerified && found.authProvider !== "google" && !found.isAdmin && !isAdminEmail(found.email)) {
+        found.salt = require("crypto").randomBytes(16).toString("hex");
+        found.passwordHash = createPasswordHash(require("crypto").randomBytes(32).toString("hex"), found.salt);
+        db.sessions = db.sessions.filter(s => s.userId !== found.id);
+      }
+      if (found) found.emailVerified = true;
       if (!found) {
         found = makeGoogleUser(name, email, photo);
+        found.emailVerified = true;
         db.users.push(found);
         db.storage[found.id] = {};
       }
