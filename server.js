@@ -669,7 +669,8 @@ targetUser.passwordHash = createPasswordHash(newPassword, targetUser.salt);
         if (String(body.newPassword).length < 6) return json(res, 400, { error: "New password must be at least 6 characters." });
         if (String(body.newPassword) !== String(body.confirmPassword)) return json(res, 400, { error: "Passwords do not match." });
         user.salt = require("crypto").randomBytes(16).toString("hex");
-        user.passwordHash = createPasswordHash(String(body.newPassword), user.salt);
+       user.passwordHash = createPasswordHash(String(body.newPassword), user.salt);
+        { const curTok = (req.headers.authorization || "").startsWith("Bearer ") ? req.headers.authorization.slice(7) : ""; db.sessions = db.sessions.filter(s => s.userId !== user.id || s.token === curTok); }
       }
       writeDb(db);
       return json(res, 200, { ok: true, user: sanitizeUser(user) });
@@ -832,7 +833,8 @@ if (urlPath === "/api/pharmacy/upload" && req.method === "POST") {
     return json(res, 401, { error: "Unauthorized" });
   }
 
-  if (urlPath.startsWith("/api/pharmacy/doc/") && req.method === "GET") {
+if (urlPath.startsWith("/api/pharmacy/doc/") && req.method === "GET") {
+    try { decodeURIComponent(urlPath); } catch (e) { return json(res, 400, { error: "Bad path." }); }
     if (!user) return json(res, 401, { error: "Unauthorized" });
     let cleaned = urlPath.split("?")[0].split("#")[0];
     cleaned = decodeURIComponent(cleaned);
@@ -933,7 +935,8 @@ if (urlPath === "/api/pharmacy/upload" && req.method === "POST") {
     return json(res, 401, { error: "Unauthorized" });
   }
 
-  if (urlPath.startsWith("/api/gym/doc/") && req.method === "GET") {
+if (urlPath.startsWith("/api/gym/doc/") && req.method === "GET") {
+    try { decodeURIComponent(urlPath); } catch (e) { return json(res, 400, { error: "Bad path." }); }
     if (!user) return json(res, 401, { error: "Unauthorized" });
     let cleaned = urlPath.split("?")[0].split("#")[0];
     cleaned = decodeURIComponent(cleaned);
