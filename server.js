@@ -976,7 +976,8 @@ if (urlPath.startsWith("/api/gym/doc/") && req.method === "GET") {
     if (!user) return json(res, 401, { error: "Unauthorized" });
     try {
       const body = await parseBody(req);
-      const event = recordMonitoringEvent(db, {
+const event = recordMonitoringEvent(db, {
+        userId: user.id,
         type: body.type || "generic",
         issueType: body.issueType || body.type || "technical",
         severity: body.severity || "low",
@@ -1004,7 +1005,7 @@ if (urlPath.startsWith("/api/gym/doc/") && req.method === "GET") {
 
   if (urlPath === "/api/monitoring/status" && req.method === "GET") {
     if (!user) return json(res, 401, { error: "Unauthorized" });
-    return json(res, 200, { ok: true, status: getMonitoringStatus(db) });
+return json(res, 200, { ok: true, status: requireAdmin(user) ? getMonitoringStatus(db) : getMonitoringStatus(db, user.id) });
   }
 
   if (urlPath === "/api/ai/run" && req.method === "POST") {
