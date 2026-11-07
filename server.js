@@ -637,7 +637,10 @@ sendEmail(
       targetUser.salt = require("crypto").randomBytes(16).toString("hex");
 targetUser.passwordHash = createPasswordHash(newPassword, targetUser.salt);
       targetUser.emailVerified = true;
-      consumePasswordResetToken(entry);
+consumePasswordResetToken(entry);
+      db.password_resets = db.password_resets.filter(function (r) {
+        return r !== entry && !r.used && Number(r.expiresAt || 0) > Date.now();
+      });
 
       db.sessions = db.sessions.filter(s => s.userId !== targetUser.id);
 
