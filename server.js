@@ -18,7 +18,7 @@ function writeBootStatus(msg) {
 }
 writeBootStatus("BOOTING " + new Date().toISOString());
 
-const { readDb, writeDb, initDb } = require("./lib/db");
+const { readDb, writeDb, initDb, flushDb } = require("./lib/db");
 const { restoreAllDbFiles, backupAllDbFiles } = require("./lib/sqlite-cloud-sync");
 const { json, parseBody } = require("./lib/http");
 const { makeUser, makeGoogleUser, verifyPassword, createPasswordHash, sanitizeUser, createSession, getSessionUser, requireAdmin, isAdminEmail, ADMIN_EMAILS, isSubscriptionActive, getSubscriptionDaysLeft, setSubscription, migrateUsers } = require("./lib/auth");
@@ -189,6 +189,8 @@ function verifyWebhookSignature(req) {
  return Boolean(process.env.WHATSAPP_VERIFY_TOKEN) && param === process.env.WHATSAPP_VERIFY_TOKEN;
 }
 
+let bootReady = false;
+
 async function bootDb() {
   await initDb();
   const db = readDb();
@@ -200,7 +202,8 @@ async function bootDb() {
   await restoreAllDbFiles();
 
   initEcosystemDb();
-  migrateLegacyData();
+ migrateLegacyData();
+  bootReady = true;
 
   // Backup every 20 minutes so recent store data is never lost.
  setInterval(function () {
@@ -212,7 +215,12 @@ async function bootDb() {
   // Backup immediately when Render sends a shutdown signal
   // (this happens right before every redeploy/restart/sleep).
   var shuttingDown = false;
-  function handleShutdown(signal) {
+function handleShutdown(signal) {
+    if (!shuttingDown) {
+      flushDb().then(function () { handleShutdownInner(signal); });
+    }
+  }
+  function handleShutdownInner(signal) {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log("[sqlite-cloud-sync] " + signal + " received — backing up before shutdown...");
@@ -231,6 +239,7 @@ async function bootDb() {
 }
 
 function resolveFilePath(urlPath) {
+  try { decodeURIComponent(String(urlPath).split("?")[0].split("#")[0]); } catch (e) { return null; }
   let cleaned = urlPath.split("?")[0].split("#")[0];
   cleaned = decodeURIComponent(cleaned);
   cleaned = cleaned.replace(/^(\.\.[/\\])+/, "");
@@ -483,7 +492,11 @@ res.setHeader("Access-Control-Allow-Credentials", "true");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   if (req.method === "OPTIONS") return json(res, 200, { ok: true });
 
-  const urlPath = req.url.split("?")[0];
+ const urlPath = req.url.split("?")[0];
+
+  if (!bootReady && urlPath.startsWith("/api/") && urlPath !== "/api/health") {
+    return json(res, 503, { error: "Server is starting. Please try again in a few seconds." });
+  }
 
   if (urlPath.startsWith('/api/')) {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
@@ -2239,13 +2252,19 @@ const body = await parseBody(req);
 process.on("uncaughtException", function (e) {
   try {
     writeBootStatus("CRASH (uncaughtException): " + (e && e.stack ? e.stack : e));
+    console.error("uncaughtException:", e);
+    flushDb().then(function () { process.exit(1); });
+    setTimeout(function () { process.exit(1); }, 3000);
+    return;
   } catch (x) {}
   process.exit(1);
 });
 
 process.on("unhandledRejection", function (reason) {
   try {
-    writeBootStatus("CRASH (unhandledRejection): " + (reason && reason.stack ? reason.stack : reason));
+writeBootStatus("CRASH (unhandledRejection): " + (reason && reason.stack ? reason.stack : reason));
+    console.error("unhandledRejection (server kept running):", reason);
+    return;
   } catch (x) {}
   process.exit(1);
 });
