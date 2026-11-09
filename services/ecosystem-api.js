@@ -36,10 +36,10 @@ function canEnableModule(user, moduleKey, grantedModules) {
   return granted.indexOf(moduleKey) !== -1;
 }
 
-function parseBody(req) {
+function parseBody(req, maxBytes) {
   return new Promise(function(resolve, reject) {
     var body = '';
-    req.on('data', function(chunk) { body += chunk; });
+req.on('data', function(chunk) { if (req.__tooLarge) return; body += chunk; if (maxBytes && body.length > maxBytes) { req.__tooLarge = true; body = ''; } });
     req.on('end', function() {
       try { resolve(JSON.parse(body || '{}')); }
       catch(e) { reject(e); }
@@ -80,6 +80,20 @@ function queueMessage(db, storeId, channel, recipient, message, relatedType, rel
   db.prepare('INSERT INTO customer_messages (id, store_id, channel, recipient, message, related_type, related_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .run(id, storeId, channel || 'web', recipient || '', message, relatedType || '', relatedId || '');
   return db.prepare('SELECT * FROM customer_messages WHERE id = ?').get(id);
+}
+
+var publicHits = {};
+function publicRateLimited(req, key, maxHits, windowMs) {
+  var xff = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  var ip = xff || (req.socket && req.socket.remoteAddress) || 'unknown';
+  var now = Date.now();
+  var bucket = ip + '|' + key;
+  var list = (publicHits[bucket] || []).filter(function(t) { return now - t < windowMs; });
+  if (list.length >= maxHits) { publicHits[bucket] = list; return true; }
+  list.push(now);
+  publicHits[bucket] = list;
+  if (Math.random() < 0.01 && Object.keys(publicHits).length > 5000) { publicHits = {}; }
+  return false;
 }
 
 function ownerId(user) {
@@ -186,7 +200,9 @@ function handleEcosystem(req, res, user) {
   }
 
   // ---- Advanced Inventory helper (stock +/- with history log) --------
-  function adjustStock(storeId, itemId, qtyChange, changeType, opts) {
+function adjustStock(storeId, itemId, qtyChange, changeType, opts) {
+    qtyChange = Number(qtyChange);
+    if (!isFinite(qtyChange)) return { error: 'invalid_quantity' };
     opts = opts || {};
     var item = db.prepare('SELECT * FROM menu_items WHERE id = ? AND store_id = ?').get(itemId, storeId);
     if (!item) return null;
@@ -206,7 +222,8 @@ function handleEcosystem(req, res, user) {
   }
   // ----------------------------------------------------------------
 
-  return parseBody(req).catch(function() { return {}; }).then(function(body) {
+return parseBody(req, user ? 8 * 1024 * 1024 : 256 * 1024).catch(function() { return {}; }).then(function(body) {
+    if (req.__tooLarge) return json(res, 413, { error: 'Request too large.' });
     if (user && user.id) {
       try { db = openUdb(user.id); } catch (e) { console.error('[handleEcosystem] db init failed for user', user.id, e && e.stack); }
     }
@@ -343,7 +360,9 @@ function handleEcosystem(req, res, user) {
     if (urlPath === '/api/ecosystem/qr' && method === 'GET') {
       var qrText = ''; var qrSize = 240;
       try { var qrUrl = new URL(req.url, 'http://localhost'); qrText = qrUrl.searchParams.get('text') || ''; qrSize = parseInt(qrUrl.searchParams.get('size') || '240', 10) || 240; } catch(e) {}
-      if (!qrText) return json(res, 400, { error: 'text is required.' });
+if (!qrText) return json(res, 400, { error: 'text is required.' });
+      if (qrText.length > 1000) return json(res, 400, { error: 'text is too long.' });
+      qrSize = Math.min(Math.max(qrSize, 64), 1024);
       if (!QRCode) return json(res, 503, { error: 'qrcode package not installed on this server' });
       QRCode.toBuffer(qrText, { width: qrSize, margin: 2, errorCorrectionLevel: 'M' }, function(err, buf) {
         if (err) return json(res, 500, { error: 'qr generation failed' });
@@ -487,7 +506,8 @@ if (urlPath === '/api/ecosystem/stores' && method === 'GET') {
   var stores;
   
   // ✅ FIX: Filter by owner unless admin
- var myOwnerId = user ? user.id : null;
+
+var myOwnerId = user ? user.id : null;
 var isAdmin = user && user.isAdmin;
 
 if (type) {
@@ -564,7 +584,8 @@ if (type) {
       categories.forEach(function(cat) {
         try { cat.items = db.prepare('SELECT * FROM menu_items WHERE category_id = ? AND is_available = 1 ORDER BY sort_order').all(cat.id); } catch(e){ cat.items = []; }
       });
-      store.menu_categories = categories;
+store.menu_categories = categories;
+
       try { store.gym_plans = db.prepare('SELECT * FROM gym_plans WHERE store_id = ? ORDER BY price ASC').all(storeId); } catch(e){ store.gym_plans = []; }
       var normalizedStore = normalizeStore(store);
       if (normalizedStore && normalizedStore.settings_json === undefined) { normalizedStore.settings_json = store.settings_json || '{}'; }
@@ -730,7 +751,8 @@ if (type) {
   if (!store) return json(res, 404, { error: 'Store not found.' });
   if (!store.ordering_enabled) return json(res, 403, { error: 'Online ordering is disabled.' });
   if (!body.items || !body.items.length) return json(res, 400, { error: 'Order must have at least one item.' });
-  var orderId = 'ord_' + generateId();
+var orderId = 'ord_' + generateId();
+
   var subtotal = 0;
   body.items.forEach(function(item) { subtotal += Number(item.price || 0) * Number(item.qty || 1); });
   var taxRate = Number(body.tax_rate || 0);
@@ -788,7 +810,13 @@ if (type) {
       var store = switchToStoreOwner(storeId);
       if (!store) return json(res, 404, { error: 'Store not found.' });
       if (!store.booking_enabled) return json(res, 403, { error: 'Bookings are disabled.' });
-      if (!body.customer_name || !body.booking_date || !body.booking_time) return json(res, 400, { error: 'Name, date, and time are required.' });
+if (!body.customer_name || !body.booking_date || !body.booking_time) return json(res, 400, { error: 'Name, date, and time are required.' });
+      if (!canManageStore(user, store) && publicRateLimited(req, 'booking:' + storeId, 10, 60 * 60 * 1000)) return json(res, 429, { error: 'Too many booking requests. Please try again later.' });
+      body.customer_name = String(body.customer_name).slice(0, 100);
+      body.note = String(body.note || '').slice(0, 500);
+      if (!canManageStore(user, store) && publicRateLimited(req, 'booking:' + storeId, 10, 60 * 60 * 1000)) return json(res, 429, { error: 'Too many booking requests. Please try again later.' });
+      body.customer_name = String(body.customer_name).slice(0, 100);
+      body.note = String(body.note || '').slice(0, 500);
       var bookingId = 'book_' + generateId();
       db.prepare('INSERT INTO store_bookings (id, store_id, customer_name, customer_phone, customer_email, service_name, booking_date, booking_time, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
         .run(bookingId, storeId, body.customer_name, body.customer_phone || '', body.customer_email || '', body.service_name || '', body.booking_date, body.booking_time, body.note || '');
@@ -858,14 +886,24 @@ if (type) {
       if (!getStore(storeId)) return json(res, 404, { error: 'Store not found.' });
       switchToStoreOwner(storeId);
       var reviews = [];
-      try { reviews = db.prepare('SELECT * FROM store_reviews WHERE store_id = ? AND is_approved = 1 ORDER BY created_at DESC').all(storeId); } catch(e){}
+try { reviews = db.prepare('SELECT * FROM store_reviews WHERE store_id = ? AND is_approved = 1 ORDER BY created_at DESC').all(storeId); } catch(e){}
+      var revStoreRow = getStore(storeId);
+      if (!canManageStore(user, revStoreRow)) reviews.forEach(function(r) { delete r.customer_email; });
+      var revStoreRow = getStore(storeId);
+      if (!canManageStore(user, revStoreRow)) reviews.forEach(function(r) { delete r.customer_email; });
       return json(res, 200, { ok: true, reviews: reviews });
     }
 
     if (urlPath.match(/^\/api\/ecosystem\/stores\/[^/]+\/reviews$/) && method === 'POST') {
       var storeId = urlPath.split('/')[4];
       if (!getStore(storeId)) return json(res, 404, { error: 'Store not found.' });
-      if (!body.rating || body.rating < 1 || body.rating > 5) return json(res, 400, { error: 'Rating must be between 1 and 5.' });
+var ratingN = Math.round(Number(body.rating));
+      if (!ratingN || ratingN < 1 || ratingN > 5) return json(res, 400, { error: 'Rating must be between 1 and 5.' });
+      if (publicRateLimited(req, 'review:' + storeId, 5, 60 * 60 * 1000)) return json(res, 429, { error: 'Too many reviews. Please try again later.' });
+      body.rating = ratingN;
+      body.customer_name = String(body.customer_name || '').slice(0, 80);
+      body.customer_email = String(body.customer_email || '').slice(0, 120);
+      body.comment = String(body.comment || '').slice(0, 1000);
       switchToStoreOwner(storeId);
       var reviewId = 'rev_' + generateId();
       db.prepare('INSERT INTO store_reviews (id, store_id, customer_name, customer_email, rating, comment, is_approved) VALUES (?, ?, ?, ?, ?, ?, 1)').run(reviewId, storeId, body.customer_name || 'Anonymous', body.customer_email || '', body.rating, body.comment || '');
@@ -947,7 +985,7 @@ if (type) {
     // Member: hybrid auto check-in (app opens near gym -> records entry)
     if (urlPath === '/api/ecosystem/gym/checkin' && method === 'POST') {
       if (requireLogin(res, user)) return;
-      var checkinEmail = String(body.email || user.email || '').trim().toLowerCase();
+var checkinEmail = actingEmail(body.email, body.store_id ? getStore(body.store_id) : null);
       var lat = Number(body.lat || 0);
       var lng = Number(body.lng || 0);
       if (isNaN(lat) || isNaN(lng) || (!lat && !lng)) return json(res, 400, { error: 'lat and lng required.' });
@@ -1008,7 +1046,7 @@ if (type) {
     // Member: live presence heartbeat
     if (urlPath === '/api/ecosystem/gym/presence' && method === 'POST') {
       if (requireLogin(res, user)) return;
-      var pEmail = String(body.email || user.email || '').trim().toLowerCase();
+var pEmail = actingEmail(body.email, body.store_id ? getStore(body.store_id) : null);
       var plat = Number(body.lat || 0);
       var plng = Number(body.lng || 0);
       var pDevice = String(body.device_id || '').slice(0, 80);
@@ -1053,7 +1091,7 @@ if (type) {
     // Member: leave the gym
     if (urlPath === '/api/ecosystem/gym/presence/leave' && method === 'POST') {
       if (requireLogin(res, user)) return;
-      var lEmail = String(body.email || user.email || '').trim().toLowerCase();
+var lEmail = actingEmail(body.email, body.store_id ? getStore(body.store_id) : null);
       var lStore = body.store_id ? getStore(body.store_id) : findGymStore('');
       if (lStore) switchToStoreOwner(lStore.id);
       if (body.store_id) {
@@ -1139,7 +1177,8 @@ if (type) {
       if (requireLogin(res, user)) return;
       var mineEmail = String(user.email || '').trim().toLowerCase();
       var myRows = scanRows('SELECT * FROM gym_instructions WHERE member_email = ? ORDER BY created_at DESC', [mineEmail]);
-      var broadcastRows = scanRows('SELECT * FROM gym_instructions WHERE target = ? ORDER BY created_at DESC', ['all']);
+var myGymStoreIds = scanRows('SELECT store_id FROM gym_members WHERE email = ?', [mineEmail]).map(function(r) { return r.store_id; });
+      var broadcastRows = scanRows('SELECT * FROM gym_instructions WHERE target = ? ORDER BY created_at DESC', ['all']).filter(function(r) { return myGymStoreIds.indexOf(r.store_id) !== -1; });
       return json(res, 200, { ok: true, email: mineEmail, personal: myRows, broadcast: broadcastRows });
     }
 
@@ -1170,6 +1209,14 @@ if (type) {
     }
 
     // ============ GYM CLASSES & BOOKINGS ============
+function actingEmail(bodyEmail, store) {
+      var own = String(user.email || '').trim().toLowerCase();
+      var asked = String(bodyEmail || '').trim().toLowerCase();
+      if (!asked || asked === own) return own;
+      if (user.isAdmin || (store && canManageStore(user, store))) return asked;
+      return own;
+    }
+
     function ownerGymStore() {
       var sid = body.store_id || new URL(req.url, 'http://localhost').searchParams.get('store_id') || '';
       var s = findGymStore(sid);
@@ -1268,7 +1315,7 @@ if (type) {
       var bkId = String(body.class_id || '');
       var bkClass = db.prepare('SELECT * FROM gym_classes WHERE id = ? AND store_id = ? AND status = ?').get(bkId, bkStore.id, 'active');
       if (!bkClass) return json(res, 404, { error: 'Class not found or inactive.' });
-      var bkEmail = String(body.email || user.email || '').trim().toLowerCase();
+var bkEmail = actingEmail(body.email, bkStore);
       var bkMember = db.prepare('SELECT * FROM gym_members WHERE store_id = ? AND email = ?').get(bkStore.id, bkEmail);
       var today = new Date().toISOString().slice(0, 10);
       if (!bkMember || !validMember(bkMember, today)) return json(res, 403, { error: 'Only active gym members can book classes.' });
@@ -1296,7 +1343,7 @@ if (type) {
       if (!ccStore) return json(res, 404, { error: 'Gym store not found.' });
       switchToStoreOwner(ccStore.id);
       var ccId = String(body.class_id || '');
-      var ccEmail = String(body.email || user.email || '').trim().toLowerCase();
+var ccEmail = actingEmail(body.email, ccStore);
       var ccRow = db.prepare('SELECT * FROM gym_class_bookings WHERE class_id = ? AND member_email = ?').get(ccId, ccEmail);
       if (!ccRow) return json(res, 404, { error: 'Booking not found.' });
       db.prepare('UPDATE gym_class_bookings SET status = ? WHERE id = ?').run('cancelled', ccRow.id);
