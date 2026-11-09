@@ -203,6 +203,8 @@ function handleEcosystem(req, res, user) {
 function adjustStock(storeId, itemId, qtyChange, changeType, opts) {
     qtyChange = Number(qtyChange);
     if (!isFinite(qtyChange)) return { error: 'invalid_quantity' };
+    qtyChange = Number(qtyChange);
+    if (!isFinite(qtyChange)) return { error: 'invalid_quantity' };
     opts = opts || {};
     var item = db.prepare('SELECT * FROM menu_items WHERE id = ? AND store_id = ?').get(itemId, storeId);
     if (!item) return null;
@@ -1664,7 +1666,8 @@ var ccEmail = actingEmail(body.email, ccStore);
     if (urlPath === '/api/ecosystem/gym/trainer' && method === 'POST') {
       if (requireLogin(res, user)) return;
 var tEmail = (user.isAdmin ? String(body.email || user.email || '') : String(user.email || '')).trim().toLowerCase();
-      var tQuery = String(body.query || '').slice(0, 1000);
+     if (publicRateLimited(req, 'trainer-' + user.id, 40, 3600000)) return json(res, 429, { error: 'Too many requests. Please try again later.' });
+var tQuery = String(body.query || '').slice(0, 1000);
       var tGoal = String(body.goal || 'general').slice(0, 60);
       var tLevel = String(body.level || 'beginner').slice(0, 30);
       var tDuration = Number(body.duration || 45);
@@ -1981,7 +1984,14 @@ var tEmail = (user.isAdmin ? String(body.email || user.email || '') : String(use
       if (requireStoreOwner(res, user, poStore)) return null;
       var poItemsIn = Array.isArray(body.items) ? body.items : [];
       if (!poItemsIn.length) return json(res, 400, { error: 'At least one item is required.' });
-      var poId = 'po_' + generateId();
+var poBad = false;
+poItemsIn.forEach(function(it) {
+  var q = Number(it && it.qty_ordered) || 0;
+  var c = Number(it && it.unit_cost) || 0;
+  if (!isFinite(q) || q < 0 || !isFinite(c) || c < 0) poBad = true;
+});
+if (poBad) return json(res, 400, { error: 'Quantities and costs must be zero or positive numbers.' });
+var poId = 'po_' + generateId();
       var poTotal = 0;
       poItemsIn.forEach(function(it) { poTotal += (Number(it.qty_ordered) || 0) * (Number(it.unit_cost) || 0); });
       db.prepare('INSERT INTO purchase_orders (id, store_id, supplier_name, supplier_phone, status, notes, total_cost, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))')
@@ -2095,7 +2105,20 @@ var tEmail = (user.isAdmin ? String(body.email || user.email || '') : String(use
       }
       var toItemsIn = Array.isArray(body.items) ? body.items : [];
       if (!toItemsIn.length) return json(res, 400, { error: 'At least one item is required.' });
-      var toId = 'to_' + generateId();
+var toMerged = {};
+var toBad = false;
+toItemsIn.forEach(function(it) {
+  var q = Number(it && it.qty) || 0;
+  var iid = String((it && it.item_id) || '');
+  if (!isFinite(q) || q < 0 || (q > 0 && !iid)) { toBad = true; return; }
+  if (q === 0) return;
+  if (!toMerged[iid]) toMerged[iid] = { item_id: iid, item_name: String(it.item_name || '').slice(0, 200), qty: 0, unit_cost: Number(it.unit_cost) || 0 };
+  toMerged[iid].qty += q;
+});
+if (toBad) return json(res, 400, { error: 'Each transfer item needs an item_id and a non-negative quantity.' });
+toItemsIn = Object.keys(toMerged).map(function(k) { return toMerged[k]; });
+if (!toItemsIn.length) return json(res, 400, { error: 'At least one item with a positive quantity is required.' });
+var toId = 'to_' + generateId();
       db.prepare('INSERT INTO transfer_orders (id, from_store_id, to_store_id, status, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime(\'now\'))')
         .run(toId, toFromId, toToId, 'pending', String(body.note || ''), actorName);
       toItemsIn.forEach(function(it) {
@@ -2151,7 +2174,15 @@ var tEmail = (user.isAdmin ? String(body.email || user.email || '') : String(use
       if (!toRecvRow || toRecvRow.to_store_id !== toRecvStoreId) return json(res, 404, { error: 'Transfer order not found.' });
       if (toRecvRow.status !== 'in_transit') return json(res, 400, { error: 'Only in-transit transfers can be received.' });
       var toRecvItems = db.prepare('SELECT * FROM transfer_order_items WHERE transfer_id = ?').all(toRecvId);
-      var toRecvNotes = [];
+     var toMissing = [];
+toRecvItems.forEach(function(it) {
+  var chk = db.prepare('SELECT id FROM menu_items WHERE store_id = ? AND lower(name) = lower(?)').get(toRecvStoreId, it.item_name);
+  if (!chk) toMissing.push(it.item_name);
+});
+if (toMissing.length) {
+  return json(res, 400, { error: 'Destination store has no item named: ' + toMissing.join(', ') + '. Add the item first, then receive the transfer.' });
+}
+var toRecvNotes = [];
       toRecvItems.forEach(function(it) {
         var destItem = db.prepare('SELECT * FROM menu_items WHERE store_id = ? AND lower(name) = lower(?)').get(toRecvStoreId, it.item_name);
         if (destItem) {
@@ -2236,7 +2267,8 @@ var tEmail = (user.isAdmin ? String(body.email || user.email || '') : String(use
       icSubItems.forEach(function(it) {
         var row = db.prepare('SELECT * FROM inventory_count_items WHERE count_id = ? AND item_id = ?').get(icSubId, it.item_id);
         if (row) {
-          var counted = Number(it.counted_qty) || 0;
+         var counted = Number(it.counted_qty);
+if (!isFinite(counted) || counted < 0) counted = 0;
           db.prepare('UPDATE inventory_count_items SET counted_qty = ?, variance = ? WHERE id = ?').run(counted, counted - Number(row.expected_qty), row.id);
         }
       });
@@ -2336,7 +2368,23 @@ var tEmail = (user.isAdmin ? String(body.email || user.email || '') : String(use
       if (!proIngredients || !proIngredients.length || !proOutputId) {
         return json(res, 400, { error: 'output_item_id and ingredients (or recipe_id) are required.' });
       }
-      for (var pi = 0; pi < proIngredients.length; pi++) {
+     var proMerged = {};
+var proBad = false;
+proIngredients.forEach(function(ing) {
+  var q = Number(ing && ing.qty) || 0;
+  var iid = String((ing && ing.item_id) || '');
+  if (!isFinite(q) || q < 0 || (q > 0 && !iid)) { proBad = true; return; }
+  if (q === 0) return;
+  if (!proMerged[iid]) proMerged[iid] = { item_id: iid, item_name: String(ing.item_name || ''), qty: 0 };
+  proMerged[iid].qty += q;
+});
+if (proBad) return json(res, 400, { error: 'Each ingredient needs an item_id and a non-negative quantity.' });
+proIngredients = Object.keys(proMerged).map(function(k) { return proMerged[k]; });
+if (!proIngredients.length) return json(res, 400, { error: 'At least one ingredient with a positive quantity is required.' });
+if (!db.prepare('SELECT id FROM menu_items WHERE id = ? AND store_id = ?').get(proOutputId, proStoreId)) {
+  return json(res, 404, { error: 'Output item not found.' });
+}
+for (var pi = 0; pi < proIngredients.length; pi++) {
         var ingRow = db.prepare('SELECT * FROM menu_items WHERE id = ? AND store_id = ?').get(proIngredients[pi].item_id, proStoreId);
         var ingAvail = ingRow && Number(ingRow.stock_qty) >= 0 ? Number(ingRow.stock_qty) : 0;
         if (!ingRow || ingAvail < Number(proIngredients[pi].qty)) {
@@ -2409,7 +2457,7 @@ var tEmail = (user.isAdmin ? String(body.email || user.email || '') : String(use
     if (method === 'GET' && (m = urlPath.match(/^\/api\/ecosystem\/items\/([^/]+)\/label$/))) {
       var lblItemId = m[1];
       var lblStoreId = qStoreId();
-      var lblSize = parseInt(invQuery.get('size'), 10) || 200;
+     var lblSize = Math.min(1024, Math.max(64, parseInt(invQuery.get('size'), 10) || 200));
       var lblStore = switchToStoreOwner(lblStoreId);
       if (!lblStore) return json(res, 404, { error: 'Store not found.' });
       if (requireStoreOwner(res, user, lblStore)) return null;
@@ -2433,7 +2481,8 @@ var tEmail = (user.isAdmin ? String(body.email || user.email || '') : String(use
       var blkStore = switchToStoreOwner(blkStoreId);
       if (!blkStore) return json(res, 404, { error: 'Store not found.' });
       if (requireStoreOwner(res, user, blkStore)) return null;
-      if (!blkIds.length) return json(res, 400, { error: 'ids query param is required.' });
+     if (!blkIds.length) return json(res, 400, { error: 'ids query param is required.' });
+blkIds = blkIds.slice(0, 100);
       if (!QRCode) return json(res, 500, { error: 'QR library not available on server.' });
       var blkItems = blkIds.map(function(id) { return db.prepare('SELECT * FROM menu_items WHERE id = ? AND store_id = ?').get(id, blkStoreId); }).filter(Boolean);
       return Promise.all(blkItems.map(function(it) {
