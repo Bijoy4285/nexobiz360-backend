@@ -203,8 +203,6 @@ function handleEcosystem(req, res, user) {
 function adjustStock(storeId, itemId, qtyChange, changeType, opts) {
     qtyChange = Number(qtyChange);
     if (!isFinite(qtyChange)) return { error: 'invalid_quantity' };
-    qtyChange = Number(qtyChange);
-    if (!isFinite(qtyChange)) return { error: 'invalid_quantity' };
     opts = opts || {};
     var item = db.prepare('SELECT * FROM menu_items WHERE id = ? AND store_id = ?').get(itemId, storeId);
     if (!item) return null;
@@ -509,23 +507,29 @@ if (urlPath === '/api/ecosystem/stores' && method === 'GET') {
   
   // ✅ FIX: Filter by owner unless admin
 
+var pubCols = 'id, slug, name, type, description, address, phone, lat, lng, logo_url, cover_url, template_key, accent_color, tagline, opening_hours, is_active';
 var myOwnerId = user ? user.id : null;
 var isAdmin = user && user.isAdmin;
 
-if (type) {
-  if (isAdmin || !myOwnerId) {
+if (!user) {
+  if (type) {
+    stores = db.prepare('SELECT ' + pubCols + ' FROM reg.stores WHERE is_active = 1 AND type = ? ORDER BY name').all(type);
+  } else {
+    stores = db.prepare('SELECT ' + pubCols + ' FROM reg.stores WHERE is_active = 1 ORDER BY name').all();
+  }
+} else if (isAdmin) {
+  if (type) {
     stores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 AND type = ? ORDER BY name').all(type);
   } else {
-    stores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 AND type = ? AND owner_id = ? ORDER BY name').all(type, myOwnerId);
+    stores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 ORDER BY name').all();
   }
 } else {
-  if (isAdmin || !myOwnerId) {
-    stores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 ORDER BY name').all();
+  if (type) {
+    stores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 AND type = ? AND owner_id = ? ORDER BY name').all(type, myOwnerId);
   } else {
     stores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 AND owner_id = ? ORDER BY name').all(myOwnerId);
   }
 }
-  
   stores.forEach(function(s) {
     var stats = reviewStatsFor(s.id);
     s.review_count = stats.review_count;
@@ -587,6 +591,15 @@ if (type) {
         try { cat.items = db.prepare('SELECT * FROM menu_items WHERE category_id = ? AND is_available = 1 ORDER BY sort_order').all(cat.id); } catch(e){ cat.items = []; }
       });
 store.menu_categories = categories;
+      if (!canManageStore(user, store)) {
+        categories.forEach(function(cat) {
+          (cat.items || []).forEach(function(it) { delete it.cost_price; });
+        });
+        delete store.owner_id;
+        delete store.trial_until;
+        delete store.entry_qr_token;
+        delete store.checkout_qr_token;
+      }
 
       try { store.gym_plans = db.prepare('SELECT * FROM gym_plans WHERE store_id = ? ORDER BY price ASC').all(storeId); } catch(e){ store.gym_plans = []; }
       var normalizedStore = normalizeStore(store);
@@ -816,9 +829,6 @@ if (!body.customer_name || !body.booking_date || !body.booking_time) return json
       if (!canManageStore(user, store) && publicRateLimited(req, 'booking:' + storeId, 10, 60 * 60 * 1000)) return json(res, 429, { error: 'Too many booking requests. Please try again later.' });
       body.customer_name = String(body.customer_name).slice(0, 100);
       body.note = String(body.note || '').slice(0, 500);
-      if (!canManageStore(user, store) && publicRateLimited(req, 'booking:' + storeId, 10, 60 * 60 * 1000)) return json(res, 429, { error: 'Too many booking requests. Please try again later.' });
-      body.customer_name = String(body.customer_name).slice(0, 100);
-      body.note = String(body.note || '').slice(0, 500);
       var bookingId = 'book_' + generateId();
       db.prepare('INSERT INTO store_bookings (id, store_id, customer_name, customer_phone, customer_email, service_name, booking_date, booking_time, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
         .run(bookingId, storeId, body.customer_name, body.customer_phone || '', body.customer_email || '', body.service_name || '', body.booking_date, body.booking_time, body.note || '');
@@ -889,12 +899,9 @@ if (!body.customer_name || !body.booking_date || !body.booking_time) return json
       switchToStoreOwner(storeId);
       var reviews = [];
 try { reviews = db.prepare('SELECT * FROM store_reviews WHERE store_id = ? AND is_approved = 1 ORDER BY created_at DESC').all(storeId); } catch(e){}
-      var revStoreRow = getStore(storeId);
-      if (!canManageStore(user, revStoreRow)) reviews.forEach(function(r) { delete r.customer_email; });
-      var revStoreRow = getStore(storeId);
+           var revStoreRow = getStore(storeId);
       if (!canManageStore(user, revStoreRow)) reviews.forEach(function(r) { delete r.customer_email; });
       return json(res, 200, { ok: true, reviews: reviews });
-    }
 
     if (urlPath.match(/^\/api\/ecosystem\/stores\/[^/]+\/reviews$/) && method === 'POST') {
       var storeId = urlPath.split('/')[4];
