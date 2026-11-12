@@ -768,14 +768,48 @@ store.menu_categories = categories;
   if (!body.items || !body.items.length) return json(res, 400, { error: 'Order must have at least one item.' });
 var orderId = 'ord_' + generateId();
 
+  var isOrderOwner = canManageStore(user, store);
+  if (body.items.length > 50) return json(res, 400, { error: 'Too many items.' });
+  var menuPriceMap = {};
+  try { db.prepare('SELECT id, price FROM menu_items WHERE store_id = ?').all(storeId).forEach(function(r) { menuPriceMap[String(r.id)] = Number(r.price) || 0; }); } catch(e) {}
   var subtotal = 0;
-  body.items.forEach(function(item) { subtotal += Number(item.price || 0) * Number(item.qty || 1); });
+  for (var oi = 0; oi < body.items.length; oi++) {
+    var oItem = body.items[oi] || {};
+    var oQty = Math.floor(Number(oItem.qty || 1));
+    if (!isFinite(oQty) || oQty < 1 || oQty > 99) return json(res, 400, { error: 'Invalid quantity.' });
+    oItem.qty = oQty;
+    var dbPrice = menuPriceMap[String(oItem.menu_item_id || '')];
+    if (dbPrice === undefined) return json(res, 400, { error: 'One or more items are not available.' });
+    subtotal += dbPrice * oQty;
+    oItem.price = dbPrice;
+    if (oItem.name !== undefined) oItem.name = String(oItem.name).slice(0, 120);
+    if (oItem.note !== undefined) oItem.note = String(oItem.note).slice(0, 300);
+  }
   var taxRate = Number(body.tax_rate || 0);
+  if (!isFinite(taxRate) || taxRate < 0 || taxRate > 100) taxRate = 0;
   var discount = Number(body.discount || 0);
   var serviceAmount = Number(body.service_amount || 0);
   var tax = body.tax_amount !== undefined ? Number(body.tax_amount) : (subtotal * taxRate / 100);
+  if (!isFinite(discount) || discount < 0) discount = 0;
+  if (!isFinite(serviceAmount) || serviceAmount < 0) serviceAmount = 0;
+  if (!isFinite(tax) || tax < 0) tax = 0;
+  if (!isOrderOwner) { discount = 0; tax = 0; serviceAmount = 0; taxRate = 0; }
+  if (discount > subtotal) discount = subtotal;
   var combinedTax = tax + serviceAmount;
   var total = body.total !== undefined ? Number(body.total) : (subtotal - discount + combinedTax);
+  if (!isFinite(total) || total < 0) total = (subtotal - discount + combinedTax);
+  if (!isOrderOwner) { total = subtotal; }
+  var orderStatusVal = 'pending';
+  var paymentStatusVal = 'unpaid';
+  if (isOrderOwner) {
+    var st = String(body.status || 'pending');
+    if (st === 'pending' || st === 'preparing' || st === 'ready' || st === 'served' || st === 'completed' || st === 'cancelled') orderStatusVal = st;
+    var ps = String(body.payment_status || 'unpaid');
+    if (ps === 'unpaid' || ps === 'paid' || ps === 'partial') paymentStatusVal = ps;
+  }
+  var orderTypeVal = String(body.order_type || 'dine_in').slice(0, 20);
+  var paymentMethodVal = String(body.payment_method || 'cash').slice(0, 20);
+  var skipNotif = isOrderOwner ? Boolean(body.skip_notifications) : false;
   var noteFinal = String(body.note || '');
   if (body.tip) noteFinal = '[tip:' + Number(body.tip).toFixed(2) + '] ' + noteFinal;
   if (serviceAmount > 0) noteFinal = '[service:' + serviceAmount.toFixed(2) + '] ' + noteFinal;
@@ -783,17 +817,17 @@ var orderId = 'ord_' + generateId();
   var customerNameVal = String(body.customer_name || '');
 
   db.prepare('INSERT INTO store_orders (id, store_id, table_number, customer_name, customer_phone, customer_email, staff_name, order_type, status, subtotal, tax, discount, total, note, payment_method, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(orderId, storeId, body.table_number || '', customerNameVal, body.customer_phone || '', body.customer_email || '', staffNameVal, body.order_type || 'dine_in', body.status || 'pending', subtotal, combinedTax, discount, total, noteFinal, body.payment_method || 'cash', body.payment_status || 'unpaid');
+   .run(orderId, storeId, String(body.table_number || '').slice(0,20), String(customerNameVal || '').slice(0,80), String(body.customer_phone || '').slice(0,20), String(body.customer_email || '').slice(0,120), String(staffNameVal || '').slice(0,80), orderTypeVal, orderStatusVal, subtotal, combinedTax, discount, total, String(noteFinal || '').slice(0,500), paymentMethodVal, paymentStatusVal);
 
   var insertItem = db.prepare('INSERT INTO order_items (id, order_id, menu_item_id, name, price, qty, note) VALUES (?, ?, ?, ?, ?, ?, ?)');
   body.items.forEach(function(item) {
-    insertItem.run('oi_' + generateId(), orderId, item.menu_item_id || null, item.name, item.price || 0, item.qty || 1, item.note || '');
+    insertItem.run('oi_' + generateId(), orderId, String(item.menu_item_id || '').slice(0,60) || null, String(item.name || '').slice(0,120), Number(item.price || 0) || 0, Math.floor(Number(item.qty || 1)) || 1, String(item.note || '').slice(0,300));
   });
 
   var order = db.prepare('SELECT * FROM store_orders WHERE id = ?').get(orderId);
   order.items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(orderId);
 
-  if (!body.skip_notifications) {
+if (!skipNotif) {
     queueMessage(db, storeId, 'whatsapp', store.whatsapp_number || store.phone || '', 'New order #' + orderId.slice(-6).toUpperCase() + ' from ' + (order.customer_name || order.staff_name || 'Customer') + '.', 'order', orderId);
     if (body.customer_phone) queueMessage(db, storeId, 'whatsapp', body.customer_phone, 'Your order at ' + store.name + ' was received. Order #' + orderId.slice(-6).toUpperCase() + '.', 'order', orderId);
   }
