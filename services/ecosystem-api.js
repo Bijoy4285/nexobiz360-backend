@@ -1407,8 +1407,13 @@ var ccEmail = actingEmail(body.email, ccStore);
     }
 
     // ============ MEMBER PROFILE & BODY METRICS ============
-    function findGymMemberById(dbx, id) {
-      try { return dbx.prepare('SELECT * FROM gym_members WHERE id = ?').get(id); } catch(e){ return null; }
+    function findGymMemberById(dbx, id, storeId) {
+      try {
+        var gmRow = dbx.prepare('SELECT * FROM gym_members WHERE id = ?').get(id);
+        if (!gmRow) return null;
+        if (storeId && String(gmRow.store_id || '') !== String(storeId || '')) return null;
+        return gmRow;
+      } catch(e){ return null; }
     }
 
     // Owner: get member profile + latest metrics
@@ -1419,7 +1424,7 @@ var ccEmail = actingEmail(body.email, ccStore);
       if (requireStoreOwner(res, user, pStore)) return;
       switchToStoreOwner(pStore.id);
       var pMid = String(new URL(req.url, 'http://localhost').searchParams.get('member_id') || '');
-      var pMember = findGymMemberById(db, pMid);
+var pMember = findGymMemberById(db, pMid, pStore.id);
       if (!pMember) return json(res, 404, { error: 'Member not found.' });
       var profile = null;
       try { profile = db.prepare('SELECT * FROM gym_member_profiles WHERE member_id = ?').get(pMid); } catch(e){}
@@ -1438,7 +1443,7 @@ var ccEmail = actingEmail(body.email, ccStore);
       if (requireStoreOwner(res, user, psStore)) return;
       switchToStoreOwner(psStore.id);
       var psMid = String(body.member_id || '');
-      if (!findGymMemberById(db, psMid)) return json(res, 404, { error: 'Member not found.' });
+if (!findGymMemberById(db, psMid, psStore.id)) return json(res, 404, { error: 'Member not found.' });
       var exists = db.prepare('SELECT id FROM gym_member_profiles WHERE member_id = ?').get(psMid);
       var vals = [Number(body.height_cm || 0), String(body.gender || ''), String(body.dob || ''), String(body.goal || ''), String(body.activity_level || 'moderate'), String(body.health_conditions || ''), String(body.emergency_contact || ''), String(body.emergency_phone || ''), String(body.notes || '')];
       if (exists) {
@@ -1460,7 +1465,7 @@ var ccEmail = actingEmail(body.email, ccStore);
       if (requireStoreOwner(res, user, mStore)) return;
       switchToStoreOwner(mStore.id);
       var mmid = String(body.member_id || '');
-      var mmember = findGymMemberById(db, mmid);
+var mmember = findGymMemberById(db, mmid, mStore.id);
       if (!mmember) return json(res, 404, { error: 'Member not found.' });
       var w = Number(body.weight_kg || 0);
       var h = Number(body.height_cm || 0);
@@ -1480,7 +1485,7 @@ var ccEmail = actingEmail(body.email, ccStore);
       if (requireStoreOwner(res, user, rStore)) return;
       switchToStoreOwner(rStore.id);
       var rMid = String(body.member_id || '');
-      var rMember = findGymMemberById(db, rMid);
+var rMember = findGymMemberById(db, rMid, rStore.id);
       if (!rMember) return json(res, 404, { error: 'Member not found.' });
 var days = Math.floor(Number(body.days || 0));
       if (!days) {
@@ -1508,7 +1513,7 @@ if (!isFinite(amount) || amount < 0) amount = 0;
       if (requireStoreOwner(res, user, fStore)) return;
       switchToStoreOwner(fStore.id);
       var fMid = String(body.member_id || '');
-      if (!findGymMemberById(db, fMid)) return json(res, 404, { error: 'Member not found.' });
+if (!findGymMemberById(db, fMid, fStore.id)) return json(res, 404, { error: 'Member not found.' });
       db.prepare('UPDATE gym_members SET status = ?, updated_at = datetime(\'now\') WHERE id = ?').run('Frozen', fMid);
       return json(res, 200, { ok: true, status: 'Frozen' });
     }
@@ -1521,7 +1526,7 @@ if (!isFinite(amount) || amount < 0) amount = 0;
       if (requireStoreOwner(res, user, uStore)) return;
       switchToStoreOwner(uStore.id);
       var uMid = String(body.member_id || '');
-      if (!findGymMemberById(db, uMid)) return json(res, 404, { error: 'Member not found.' });
+      if (!findGymMemberById(db, uMid, uStore.id)) return json(res, 404, { error: 'Member not found.' });
       db.prepare('UPDATE gym_members SET status = ?, updated_at = datetime(\'now\') WHERE id = ?').run('Active', uMid);
       return json(res, 200, { ok: true, status: 'Active' });
     }
@@ -1534,15 +1539,17 @@ if (!isFinite(amount) || amount < 0) amount = 0;
       if (requireStoreOwner(res, user, tStore)) return;
       switchToStoreOwner(tStore.id);
       var tm = String(body.member_id || '');
-      var tMem = findGymMemberById(db, tm);
+var tMem = findGymMemberById(db, tm, tStore.id);
       if (!tMem) return json(res, 404, { error: 'Member not found.' });
-      var newPlan = String(body.plan || tMem.plan);
+      var newPlan = String(body.plan || tMem.plan).slice(0, 120);
       var newPrice = Number(body.price != null ? body.price : tMem.price);
+      if (!isFinite(newPrice) || newPrice < 0) newPrice = 0;
+      if (newPrice > 100000000) newPrice = 100000000;
       var was = tMem.plan;
       db.prepare('UPDATE gym_members SET plan = ?, price = ?, updated_at = datetime(\'now\') WHERE id = ?').run(newPlan, newPrice, tm);
       var tpId = 'gpay_' + generateId();
       db.prepare('INSERT INTO gym_member_payments (id, store_id, member_id, member_email, member_name, type, amount, method, reference, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(tpId, tStore.id, tm, tMem.email, tMem.name, body.type || 'upgrade', newPrice, body.method || 'cash', String(body.reference || ''), 'Plan changed: ' + was + ' -> ' + newPlan);
+.run(tpId, tStore.id, tm, tMem.email, tMem.name, String(body.type || 'upgrade').slice(0, 30), newPrice, String(body.method || 'cash').slice(0, 30), String(body.reference || '').slice(0, 120), String('Plan changed: ' + was + ' -> ' + newPlan).slice(0, 500));
       return json(res, 200, { ok: true, plan: newPlan, price: newPrice });
     }
 
@@ -1566,11 +1573,13 @@ if (!isFinite(amount) || amount < 0) amount = 0;
       if (requireStoreOwner(res, user, gdStore)) return;
       switchToStoreOwner(gdStore.id);
       var gdMid = String(body.member_id || '');
-      if (!findGymMemberById(db, gdMid)) return json(res, 404, { error: 'Member not found.' });
-      db.prepare('DELETE FROM gym_members WHERE id = ?').run(gdMid);
+      var gdMem = findGymMemberById(db, gdMid, gdStore.id);
+      if (!gdMem) return json(res, 404, { error: 'Member not found.' });
+      var gdEmail = String(gdMem.email || '').trim().toLowerCase();
       db.prepare('DELETE FROM gym_member_profiles WHERE member_id = ?').run(gdMid);
       db.prepare('DELETE FROM gym_body_metrics WHERE member_id = ?').run(gdMid);
-      db.prepare('DELETE FROM gym_class_bookings WHERE member_email IN (SELECT email FROM gym_members WHERE id = ?)').run(gdMid);
+      if (gdEmail) db.prepare('DELETE FROM gym_class_bookings WHERE store_id = ? AND member_email = ?').run(gdStore.id, gdEmail);
+      db.prepare('DELETE FROM gym_members WHERE id = ?').run(gdMid);
       return json(res, 200, { ok: true });
     }
 
