@@ -195,7 +195,11 @@ function handleEcosystem(req, res, user) {
   }
     function findGymStore(storeId) {
     if (!db) return null;
-    if (storeId) return getStore(storeId);
+if (!storeId) return null;
+var gs = getStore(storeId);
+if (!gs) return null;
+if (gs.type && gs.type !== 'gym') return null;
+return gs;
     try { return db.prepare('SELECT * FROM reg.stores WHERE type = ? AND is_active = 1 ORDER BY created_at LIMIT 1').get('gym') || null; } catch(e){ return null; }
   }
 
@@ -329,7 +333,8 @@ return parseBody(req, user ? 8 * 1024 * 1024 : 256 * 1024).catch(function() { re
       var msStore = getStore(msId);
       if (!msStore) return json(res, 404, { error: 'Store not found.' });
       if (requireStoreOwner(res, user, msStore)) return;
-      var msModule = String(body.module || 'generic');
+switchToStoreOwner(msId);
+var msModule = String(body.module || 'generic');
       var msPlan = String(body.plan || '');
       var msPlanLabel = String(body.plan_label || msPlan || 'Member');
       var msPrice = Number(body.price || 0) || 0;
@@ -405,7 +410,11 @@ if (!qrText) return json(res, 400, { error: 'text is required.' });
     }
  function findGymStore(storeId) {
     if (!db) return null;
-    if (storeId) return getStore(storeId);
+if (!storeId) return null;
+var gs = getStore(storeId);
+if (!gs) return null;
+if (gs.type && gs.type !== 'gym') return null;
+return gs;
     try { return db.prepare('SELECT * FROM reg.stores WHERE type = ? AND is_active = 1 ORDER BY created_at LIMIT 1').get('gym') || null; } catch(e){ return null; }
   }
 
@@ -935,8 +944,8 @@ if (!body.customer_name || !body.booking_date || !body.booking_time) return json
 try { reviews = db.prepare('SELECT * FROM store_reviews WHERE store_id = ? AND is_approved = 1 ORDER BY created_at DESC').all(storeId); } catch(e){}
            var revStoreRow = getStore(storeId);
       if (!canManageStore(user, revStoreRow)) reviews.forEach(function(r) { delete r.customer_email; });
-      return json(res, 200, { ok: true, reviews: reviews });
-
+return json(res, 200, { ok: true, reviews: reviews });
+}
     if (urlPath.match(/^\/api\/ecosystem\/stores\/[^/]+\/reviews$/) && method === 'POST') {
       var storeId = urlPath.split('/')[4];
       if (!getStore(storeId)) return json(res, 404, { error: 'Store not found.' });
@@ -1135,7 +1144,8 @@ var pEmail = actingEmail(body.email, body.store_id ? getStore(body.store_id) : n
     if (urlPath === '/api/ecosystem/gym/presence/leave' && method === 'POST') {
       if (requireLogin(res, user)) return;
 var lEmail = actingEmail(body.email, body.store_id ? getStore(body.store_id) : null);
-      var lStore = body.store_id ? getStore(body.store_id) : findGymStore('');
+if (!body.store_id) return json(res, 400, { error: 'store_id is required.' });
+var lStore = getStore(body.store_id);
       if (lStore) switchToStoreOwner(lStore.id);
       if (body.store_id) {
         db.prepare('DELETE FROM gym_presence WHERE store_id = ? AND member_email = ?').run(body.store_id, lEmail);
@@ -1472,7 +1482,7 @@ var ccEmail = actingEmail(body.email, ccStore);
       var rMid = String(body.member_id || '');
       var rMember = findGymMemberById(db, rMid);
       if (!rMember) return json(res, 404, { error: 'Member not found.' });
-      var days = Number(body.days || 0);
+var days = Math.floor(Number(body.days || 0));
       if (!days) {
         var planRow = null;
         try { planRow = db.prepare('SELECT * FROM gym_plans WHERE store_id = ? AND name = ?').get(rStore.id, rMember.plan); } catch(e){}
@@ -1481,7 +1491,8 @@ var ccEmail = actingEmail(body.email, ccStore);
       var base = rMember.expiry && String(rMember.expiry) >= new Date().toISOString().slice(0, 10) ? new Date(String(rMember.expiry) + 'T23:59:59') : new Date();
       base.setDate(base.getDate() + days);
       var newExpiry = base.toISOString().slice(0, 10);
-      var amount = Number(body.amount != null ? body.amount : rMember.price || 0);
+var amount = Number(body.amount != null ? body.amount : rMember.price || 0);
+if (!isFinite(amount) || amount < 0) amount = 0;
       db.prepare('UPDATE gym_members SET expiry = ?, status = ?, updated_at = datetime(\'now\'), last_renewed = datetime(\'now\') WHERE id = ?').run(newExpiry, 'Active', rMid);
       var payId = 'gpay_' + generateId();
       db.prepare('INSERT INTO gym_member_payments (id, store_id, member_id, member_email, member_name, type, amount, method, reference, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
@@ -1571,11 +1582,15 @@ var ccEmail = actingEmail(body.email, ccStore);
       if (requireStoreOwner(res, user, aStore)) return;
       switchToStoreOwner(aStore.id);
       var am = String(body.member_id || '');
-      var aMem = findGymMemberById(db, am);
+var aMem = findGymMemberById(db, am);
+if (aMem && String(aMem.store_id || '') !== String(aStore.id || '')) aMem = null;
       if (!aMem) return json(res, 404, { error: 'Member not found.' });
-      var apId = 'gpay_' + generateId();
+var apId = 'gpay_' + generateId();
+var apAmount = Number(body.amount || 0);
+if (!isFinite(apAmount) || apAmount < 0) apAmount = 0;
+if (apAmount > 100000000) apAmount = 100000000;
       db.prepare('INSERT INTO gym_member_payments (id, store_id, member_id, member_email, member_name, type, amount, method, reference, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(apId, aStore.id, am, aMem.email, aMem.name, body.type || 'other', Number(body.amount || 0), body.method || 'cash', String(body.reference || ''), String(body.note || ''));
+.run(apId, aStore.id, am, aMem.email, aMem.name, String(body.type || 'other').slice(0, 30), apAmount, String(body.method || 'cash').slice(0, 30), String(body.reference || '').slice(0, 120), String(body.note || '').slice(0, 500));
       return json(res, 201, { ok: true, id: apId });
     }
 
@@ -1586,10 +1601,12 @@ var ccEmail = actingEmail(body.email, ccStore);
       if (!rdStore) return json(res, 404, { error: 'Gym store not found.' });
       if (requireStoreOwner(res, user, rdStore)) return;
       switchToStoreOwner(rdStore.id);
-      var horizon = Number(new URL(req.url, 'http://localhost').searchParams.get('days') || 14);
+var horizon = Math.floor(Number(new URL(req.url, 'http://localhost').searchParams.get('days') || 14));
+if (!isFinite(horizon) || horizon < 1) horizon = 14;
+if (horizon > 90) horizon = 90;
       var today = new Date().toISOString().slice(0, 10);
       var horizonDate = new Date(Date.now() + horizon * 86400000).toISOString().slice(0, 10);
-      var rows = db.prepare('SELECT * FROM gym_members WHERE status = ? ORDER BY expiry ASC').all('Active');
+      var rows = db.prepare('SELECT * FROM gym_members WHERE store_id = ? AND status = ? ORDER BY expiry ASC').all(rdStore.id, 'Active');
       var due = rows.filter(function(m) { return m.expiry && m.expiry >= today && m.expiry <= horizonDate; })
         .map(function(m) { var d = Math.max(0, Math.round((new Date(m.expiry + 'T00:00:00').getTime() - Date.now()) / 86400000)); return Object.assign({}, m, { days_left: d }); });
       var expired = rows.filter(function(m) { return m.expiry && m.expiry < today; }).map(function(m) { return Object.assign({}, m, { days_left: Math.round((Date.now() - new Date(m.expiry + 'T00:00:00').getTime()) / 86400000) * -1 }); });
