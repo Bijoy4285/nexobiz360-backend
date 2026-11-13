@@ -602,7 +602,8 @@ if (!user) {
 store.menu_categories = categories;
       if (!canManageStore(user, store)) {
         categories.forEach(function(cat) {
-          (cat.items || []).forEach(function(it) { delete it.cost_price; });
+cat.items = (cat.items || []).filter(function(it) { return it.is_visible_to_customers === undefined || it.is_visible_to_customers === null || Number(it.is_visible_to_customers) !== 0; });
+cat.items.forEach(function(it) { delete it.cost_price; });
         });
         delete store.owner_id;
         delete store.trial_until;
@@ -619,6 +620,11 @@ store.menu_categories = categories;
     if (urlPath === '/api/ecosystem/stores' && method === 'POST') {
       if (requireLogin(res, user)) return;
       if (!body.name || !body.type) return json(res, 400, { error: 'Store name and type are required.' });
+if (!/^[A-Za-z0-9_-]{1,30}$/.test(String(body.type))) return json(res, 400, { error: 'Invalid store type.' });
+body.name = String(body.name).slice(0, 200);
+body.description = String(body.description || '').slice(0, 2000);
+body.address = String(body.address || '').slice(0, 500);
+body.tagline = String(body.tagline || '').slice(0, 300);
       var id = 'store_' + generateId();
       var baseSlug = slugify(body.slug || body.name || id) || id;
       var slug = baseSlug;
@@ -650,7 +656,15 @@ store.menu_categories = categories;
       fields.forEach(function(f) {
         if (body[f] !== undefined) existing[f] = body[f];
       });
-      if (body.slug !== undefined) existing.slug = slugify(body.slug || existing.name);
+if (body.slug !== undefined) {
+  var putSlugBase = slugify(body.slug || existing.name) || existing.slug || storeId;
+  var putSlug = putSlugBase;
+  var putSlugN = 2;
+  while (db.prepare('SELECT id FROM reg.stores WHERE slug = ? AND id <> ?').get(putSlug, storeId)) {
+    putSlug = putSlugBase + '-' + putSlugN++;
+  }
+  existing.slug = putSlug;
+}
       existing.services_json = JSON.stringify(Array.isArray(body.services) ? body.services : safeJson(existing.services_json, []));
       existing.gallery_json = JSON.stringify(Array.isArray(body.gallery) ? body.gallery : safeJson(existing.gallery_json, []));
       if (body.settings_json !== undefined) {
@@ -702,6 +716,15 @@ store.menu_categories = categories;
       if (!store) return json(res, 404, { error: 'Store not found.' });
       if (requireStoreOwner(res, user, store)) return;
       if (!body.name || body.price === undefined) return json(res, 400, { error: 'Item name and price are required.' });
+var menuPostPrice = Number(body.price);
+if (!isFinite(menuPostPrice) || menuPostPrice < 0) return json(res, 400, { error: 'Invalid price.' });
+if (menuPostPrice > 100000000) menuPostPrice = 100000000;
+var menuPostStock = body.stock_qty === undefined ? -1 : Number(body.stock_qty);
+if (!isFinite(menuPostStock) || menuPostStock < -1) return json(res, 400, { error: 'Invalid stock quantity.' });
+if (menuPostStock > 100000000) menuPostStock = 100000000;
+var menuPostCost = body.cost_price === undefined ? 0 : Number(body.cost_price);
+if (!isFinite(menuPostCost) || menuPostCost < 0) return json(res, 400, { error: 'Invalid cost price.' });
+if (menuPostCost > 100000000) menuPostCost = 100000000;
       var categoryId = body.category_id || null;
       if (!categoryId && body.category_name) {
         var catRow = db.prepare('SELECT id FROM menu_categories WHERE store_id = ? AND lower(name) = lower(?)').get(storeId, body.category_name);
@@ -716,7 +739,7 @@ store.menu_categories = categories;
       var itemId = 'item_' + generateId();
       var maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order), 0) + 1 as next FROM menu_items WHERE store_id = ?').get(storeId).next;
       db.prepare('INSERT INTO menu_items (id, store_id, category_id, name, description, price, image_url, is_available, barcode, stock_qty, cost_price, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(itemId, storeId, categoryId, body.name, body.description || '', body.price, body.image_url || '', body.is_available !== undefined ? (body.is_available ? 1 : 0) : 1, body.barcode || '', body.stock_qty !== undefined ? Number(body.stock_qty) : -1, body.cost_price !== undefined ? Number(body.cost_price) : 0, body.sort_order || maxOrder);
+.run(itemId, storeId, categoryId, String(body.name).slice(0, 200), String(body.description || '').slice(0, 2000), menuPostPrice, body.image_url || '', body.is_available !== undefined ? (body.is_available ? 1 : 0) : 1, body.barcode || '', menuPostStock, menuPostCost, body.sort_order || maxOrder);
       return json(res, 201, { ok: true, item: db.prepare('SELECT * FROM menu_items WHERE id = ?').get(itemId) });
     }
 
@@ -921,7 +944,8 @@ if (!body.customer_name || !body.booking_date || !body.booking_time) return json
       var storeId = urlPath.split('/')[4];
       var store = normalizeStore(getStore(storeId));
       if (!store) return json(res, 404, { error: 'Store not found.' });
-      var text = String(body.message || '').toLowerCase();
+if (publicRateLimited(req, 'aichat:' + storeId, 30, 60 * 60 * 1000)) return json(res, 429, { error: 'Too many requests. Please try again later.' });
+var text = String(body.message || '').slice(0, 1000).toLowerCase();
       var reply = 'Thanks for contacting ' + store.name + '. ';
       if (text.indexOf('book') >= 0 || text.indexOf('appointment') >= 0 || text.indexOf('schedule') >= 0) {
         reply += store.booking_enabled ? 'You can request a booking from the booking form on this page.' : 'Bookings are currently disabled.';
@@ -2137,15 +2161,21 @@ var poId = 'po_' + generateId();
       };
       poRecvItems.forEach(function(poi) {
         var ov = poFindOverride(poi.item_id);
-        var qtyToReceive = ov ? Number(ov.qty_received) || 0 : (Number(poi.qty_ordered) - Number(poi.qty_received));
+var qtyToReceive = ov ? Number(ov.qty_received) : (Number(poi.qty_ordered) - Number(poi.qty_received));
+if (!isFinite(qtyToReceive) || qtyToReceive < 0) qtyToReceive = 0;
+var poRecvRemaining = Number(poi.qty_ordered) - Number(poi.qty_received);
+if (!isFinite(poRecvRemaining) || poRecvRemaining < 0) poRecvRemaining = 0;
+if (qtyToReceive > poRecvRemaining) qtyToReceive = poRecvRemaining;
         if (qtyToReceive > 0) {
-          adjustStock(poRecvStoreId, poi.item_id, qtyToReceive, 'purchase_receive', {
+var poRecvAdjustResult = adjustStock(poRecvStoreId, poi.item_id, qtyToReceive, 'purchase_receive', {
             refType: 'purchase_order', refId: poRecvId, createdBy: actorName, allowNegative: true
           });
-          if (poi.unit_cost > 0) {
+if (poRecvAdjustResult && !poRecvAdjustResult.error && poi.unit_cost > 0) {
             db.prepare('UPDATE menu_items SET cost_price = ? WHERE id = ? AND store_id = ?').run(poi.unit_cost, poi.item_id, poRecvStoreId);
           }
-          db.prepare('UPDATE purchase_order_items SET qty_received = qty_received + ? WHERE id = ?').run(qtyToReceive, poi.id);
+if (poRecvAdjustResult && !poRecvAdjustResult.error) {
+  db.prepare('UPDATE purchase_order_items SET qty_received = qty_received + ? WHERE id = ?').run(qtyToReceive, poi.id);
+}
         }
       });
       var poRecvItemsAfter = db.prepare('SELECT * FROM purchase_order_items WHERE po_id = ?').all(poRecvId);
@@ -2220,7 +2250,9 @@ var toId = 'to_' + generateId();
       for (var di = 0; di < toDispItems.length; di++) {
         var srcItem = db.prepare('SELECT * FROM menu_items WHERE id = ? AND store_id = ?').get(toDispItems[di].item_id, toDispStoreId);
         var srcAvail = srcItem && Number(srcItem.stock_qty) >= 0 ? Number(srcItem.stock_qty) : 0;
-        if (!srcItem || srcAvail < Number(toDispItems[di].qty)) {
+var diQty = Number(toDispItems[di].qty);
+if (!isFinite(diQty) || diQty <= 0) return json(res, 400, { error: 'Invalid quantity for item: ' + toDispItems[di].item_name });
+if (!srcItem || srcAvail < diQty) {
           return json(res, 400, { error: 'Insufficient stock for item: ' + toDispItems[di].item_name, available: srcAvail });
         }
       }
@@ -2416,8 +2448,9 @@ if (!isFinite(counted) || counted < 0) counted = 0;
       var proStore = switchToStoreOwner(proStoreId);
       if (!proStore) return json(res, 404, { error: 'Store not found.' });
       if (requireStoreOwner(res, user, proStore)) return null;
-      var proQty = Number(body.qty_produced) || 0;
-      if (proQty <= 0) return json(res, 400, { error: 'qty_produced must be greater than 0.' });
+var proQty = Number(body.qty_produced);
+if (!isFinite(proQty)) proQty = 0;
+if (!isFinite(proQty) || proQty <= 0 || proQty > 1000000) return json(res, 400, { error: 'qty_produced must be greater than 0 and at most 1000000.' });
       var proOutputId = String(body.output_item_id || '');
       var proOutputName = String(body.output_item_name || '');
       var proIngredients = Array.isArray(body.ingredients) ? body.ingredients.slice() : null;
