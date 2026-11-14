@@ -334,21 +334,21 @@ return parseBody(req, user ? 8 * 1024 * 1024 : 256 * 1024).catch(function() { re
       if (!msStore) return json(res, 404, { error: 'Store not found.' });
       if (requireStoreOwner(res, user, msStore)) return;
 switchToStoreOwner(msId);
-var msModule = String(body.module || 'generic');
-      var msPlan = String(body.plan || '');
-      var msPlanLabel = String(body.plan_label || msPlan || 'Member');
-      var msPrice = Number(body.price || 0) || 0;
-      var msStatus = String(body.status || 'Active');
-      var msStart = String(body.start || '');
-      var msExpiry = String(body.expiry || '');
-      var msCode = String(body.member_code || ('MB-' + generateId().slice(0, 10).toUpperCase()));
+var msModule = String(body.module || 'generic').slice(0, 30);
+var msPlan = String(body.plan || '').slice(0, 120);
+var msPlanLabel = String(body.plan_label || msPlan || 'Member').slice(0, 120);
+var msPrice = Math.min(100000000, Math.max(0, Number(body.price) || 0));
+var msStatus = String(body.status || 'Active').slice(0, 30);
+var msStart = String(body.start || '').slice(0, 20);
+var msExpiry = String(body.expiry || '').slice(0, 20);
+var msCode = String(body.member_code || ('MB-' + generateId().slice(0, 10).toUpperCase())).slice(0, 40);
       var msId2 = 'mem_' + generateId();
       db.prepare("INSERT INTO memberships (id, store_id, user_id, member_email, name, phone, module, plan, plan_label, price, status, start, expiry, member_code, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))")
-        .run(msId2, msId, '', msEmail, String(body.name || ''), String(body.phone || ''), msModule, msPlan, msPlanLabel, msPrice, msStatus, msStart, msExpiry, msCode);
+.run(msId2, msId, '', msEmail.slice(0, 200), String(body.name || '').slice(0, 200), String(body.phone || '').slice(0, 40), msModule, msPlan, msPlanLabel, msPrice, msStatus, msStart, msExpiry, msCode);
       if (msModule === 'gym') {
         try {
           db.prepare("INSERT INTO gym_members (id, store_id, email, name, phone, plan, price, expiry, status, joined, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now')) ON CONFLICT(store_id, email) DO UPDATE SET name=excluded.name, phone=excluded.phone, plan=excluded.plan, price=excluded.price, expiry=excluded.expiry, status=excluded.status, updated_at=datetime('now')")
-            .run('gm_' + generateId(), msId, msEmail, String(body.name || ''), String(body.phone || ''), msPlan, msPrice, msExpiry, msStatus, msStart);
+.run('gm_' + generateId(), msId, msEmail.slice(0, 200), String(body.name || '').slice(0, 200), String(body.phone || '').slice(0, 40), msPlan, msPrice, msExpiry, msStatus, msStart);
         } catch(e) {}
       }
       // Send the new member a branded welcome email (non-blocking)
@@ -633,7 +633,7 @@ body.tagline = String(body.tagline || '').slice(0, 300);
         slug = baseSlug + '-' + n++;
       }
       db.prepare('INSERT INTO reg.stores (id, owner_id, name, type, description, address, phone, email, lat, lng, logo_url, cover_url, is_active, slug, template_key, accent_color, tagline, opening_hours, booking_enabled, ordering_enabled, ai_enabled, whatsapp_number, services_json, gallery_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(id, ownerId(user), body.name, body.type, body.description || '', body.address || '', body.phone || '', body.email || '', body.lat || 0, body.lng || 0, body.logo_url || '', body.cover_url || '', (body.is_active === false || body.active === false) ? 0 : 1, slug, body.template_key || 'clean', body.accent_color || '#0891b2', body.tagline || '', body.opening_hours || '', body.booking_enabled === false ? 0 : 1, body.ordering_enabled === false ? 0 : 1, body.ai_enabled === false ? 0 : 1, body.whatsapp_number || body.phone || '', JSON.stringify(body.services || []), JSON.stringify(body.gallery || []));
+        .run(id, ownerId(user), body.name, body.type, body.description || '', body.address || '',String(body.phone || '').slice(0, 40), String(body.email || '').slice(0, 200), (isFinite(Number(body.lat)) && Math.abs(Number(body.lat)) <= 90 ? Number(body.lat) : 0), (isFinite(Number(body.lng)) && Math.abs(Number(body.lng)) <= 180 ? Number(body.lng) : 0), body.logo_url || '', body.cover_url || '', (body.is_active === false || body.active === false) ? 0 : 1, slug, String(body.template_key || 'clean').slice(0, 40), String(body.accent_color || '#0891b2').slice(0, 20), body.tagline || '', String(body.opening_hours || '').slice(0, 1000),.booking_enabled === false ? 0 : 1, body.ordering_enabled === false ? 0 : 1, body.ai_enabled === false ? 0 : 1, body.whatsapp_number || body.phone || '', JSON.stringify(body.services || []), JSON.stringify(body.gallery || []));
       try { provisionUserDb(ownerId(user), [body.type]); } catch(e) {}
       try {
         var coreOwner = ownerId(user);
@@ -656,7 +656,16 @@ body.tagline = String(body.tagline || '').slice(0, 300);
       fields.forEach(function(f) {
         if (body[f] !== undefined) existing[f] = body[f];
       });
-if (body.slug !== undefined) {
+if (body.type !== undefined && !/^[A-Za-z0-9_-]{1,30}$/.test(String(body.type))) return json(res, 400, { error: 'Invalid store type.' });
+      existing.name = String(existing.name || '').trim().slice(0, 200) || 'Store';
+      existing.description = String(existing.description || '').slice(0, 2000);
+      existing.address = String(existing.address || '').slice(0, 500);
+      existing.tagline = String(existing.tagline || '').slice(0, 300);
+      existing.phone = String(existing.phone || '').slice(0, 40);
+      existing.email = String(existing.email || '').slice(0, 200);
+      if (body.lat !== undefined) { var putLat = Number(body.lat); existing.lat = isFinite(putLat) && Math.abs(putLat) <= 90 ? putLat : 0; }
+      if (body.lng !== undefined) { var putLng = Number(body.lng); existing.lng = isFinite(putLng) && Math.abs(putLng) <= 180 ? putLng : 0; }
+      if (body.slug !== undefined) {
   var putSlugBase = slugify(body.slug || existing.name) || existing.slug || storeId;
   var putSlug = putSlugBase;
   var putSlugN = 2;
@@ -745,7 +754,7 @@ var categoryId = body.category_id || null;
       var itemId = 'item_' + generateId();
       var maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order), 0) + 1 as next FROM menu_items WHERE store_id = ?').get(storeId).next;
       db.prepare('INSERT INTO menu_items (id, store_id, category_id, name, description, price, image_url, is_available, barcode, stock_qty, cost_price, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-.run(itemId, storeId, categoryId, String(body.name).slice(0, 200), String(body.description || '').slice(0, 2000), menuPostPrice, body.image_url || '', body.is_available !== undefined ? (body.is_available ? 1 : 0) : 1, body.barcode || '', menuPostStock, menuPostCost, body.sort_order || maxOrder);
+.run(itemId, storeId, categoryId, String(body.name).slice(0, 200), String(body.description || '').slice(0, 2000), menuPostPrice, body.image_url || '', body.is_available !== undefined ? (body.is_available ? 1 : 0): 1, String(body.barcode || '').slice(0, 100), menuPostStock, menuPostCost, (isFinite(Number(body.sort_order)) && Number(body.sort_order)) || maxOrder);
       return json(res, 201, { ok: true, item: db.prepare('SELECT * FROM menu_items WHERE id = ?').get(itemId) });
     }
 
@@ -871,7 +880,7 @@ var menuPriceMap = Object.create(null);
   var paymentMethodVal = String(body.payment_method || 'cash').slice(0, 20);
   var skipNotif = isOrderOwner ? Boolean(body.skip_notifications) : false;
   var noteFinal = String(body.note || '');
-  if (body.tip) noteFinal = '[tip:' + Number(body.tip).toFixed(2) + '] ' + noteFinal;
+if (body.tip && isFinite(Number(body.tip)) && Number(body.tip) > 0 && Number(body.tip) <= 100000000) noteFinal = '[tip:' + Number(body.tip).toFixed(2) + '] ' + noteFinal;
   if (serviceAmount > 0) noteFinal = '[service:' + serviceAmount.toFixed(2) + '] ' + noteFinal;
   var staffNameVal = String(body.staff_name || '');
   var customerNameVal = String(body.customer_name || '');
@@ -925,7 +934,7 @@ if (!body.customer_name || !body.booking_date || !body.booking_time) return json
       body.note = String(body.note || '').slice(0, 500);
       var bookingId = 'book_' + generateId();
       db.prepare('INSERT INTO store_bookings (id, store_id, customer_name, customer_phone, customer_email, service_name, booking_date, booking_time, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(bookingId, storeId, body.customer_name, body.customer_phone || '', body.customer_email || '', body.service_name || '', body.booking_date, body.booking_time, body.note || '');
+       .run(bookingId, storeId, body.customer_name, String(body.customer_phone || '').slice(0, 40), String(body.customer_email || '').trim().slice(0, 120), String(body.service_name || '').slice(0, 200), String(body.booking_date).slice(0, 20), String(body.booking_time).slice(0, 20), body.note || '');
       var booking = db.prepare('SELECT * FROM store_bookings WHERE id = ?').get(bookingId);
       // Send the customer a branded booking confirmation (non-blocking)
       if (booking.customer_email) {
@@ -952,7 +961,8 @@ if (!body.customer_name || !body.booking_date || !body.booking_time) return json
       var bookingStore = getStore(booking.store_id);
       if (requireStoreOwner(res, user, bookingStore)) return;
       switchToStoreOwner(booking.store_id);
-      var status = body.status || booking.status;
+var status = String(body.status || booking.status || '').trim();
+      if (!/^[A-Za-z_ -]{1,30}$/.test(status)) return json(res, 400, { error: 'Invalid status.' });
       db.prepare('UPDATE store_bookings SET status=?, updated_at=datetime(\'now\') WHERE id=?').run(status, bookingId);
       booking.status = status;
       if (booking.customer_phone) queueMessage(db, booking.store_id, 'whatsapp', booking.customer_phone, 'Your booking at ' + (bookingStore && bookingStore.name) + ' is now ' + status + '.', 'booking', bookingId);
@@ -1022,7 +1032,7 @@ var ratingN = Math.round(Number(body.rating));
       var rStore = getStore(review.store_id);
       if (requireStoreOwner(res, user, rStore)) return;
       switchToStoreOwner(review.store_id);
-      db.prepare('UPDATE store_reviews SET reply = ? WHERE id = ?').run(body.reply || '', reviewId);
+db.prepare('UPDATE store_reviews SET reply = ? WHERE id = ?').run(String(body.reply || '').slice(0, 1000), reviewId);
       return json(res, 200, { ok: true });
     }
 
@@ -1049,13 +1059,13 @@ var ratingN = Math.round(Number(body.rating));
       if (!syncStore) return json(res, 404, { error: 'Gym store not found.' });
       if (requireStoreOwner(res, user, syncStore)) return;
       switchToStoreOwner(syncStore.id);
-      var members = Array.isArray(body.members) ? body.members : [];
+      var members = Array.isArray(body.members) ? body.members.slice(0, 2000) : [];
       var upsert = db.prepare('INSERT INTO gym_members (id, store_id, email, name, phone, plan, price, expiry, status, joined, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\')) ON CONFLICT(store_id, email) DO UPDATE SET name=excluded.name, phone=excluded.phone, plan=excluded.plan, price=excluded.price, expiry=excluded.expiry, status=excluded.status, joined=excluded.joined, updated_at=datetime(\'now\')');
       var count = 0;
       members.forEach(function(m) {
         var email = String(m.email || '').trim().toLowerCase();
         if (!email) return;
-        upsert.run('gm_' + generateId(), syncStore.id, email, m.name || '', m.phone || '', m.plan || 'Basic', Number(m.price || 0), m.expiry || '', m.status || 'Active', m.joined || '');
+upsert.run('gm_' + generateId(), syncStore.id, email.slice(0, 200), String(m.name || '').slice(0, 200), String(m.phone || '').slice(0, 40), String(m.plan || 'Basic').slice(0, 120), Math.min(100000000, Math.max(0, Number(m.price) || 0)), String(m.expiry || '').slice(0, 20), String(m.status || 'Active').slice(0, 30), String(m.joined || '').slice(0, 20));
         count++;
       });
       return json(res, 200, { ok: true, store_id: syncStore.id, synced: count, members: db.prepare('SELECT * FROM gym_members WHERE store_id = ?').all(syncStore.id) });
@@ -1123,7 +1133,7 @@ var checkinEmail = actingEmail(body.email, body.store_id ? getStore(body.store_i
       var checkinId = 'gci_' + generateId();
       var time = new Date().toTimeString().slice(0, 5);
       db.prepare('INSERT INTO gym_checkins (id, store_id, member_email, member_name, date, time, lat, lng, distance, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(checkinId, pickStore.id, checkinEmail, pick.name, today, time, lat, lng, Math.round(dist), body.source || 'app');
+        .run(checkinId, pickStore.id, checkinEmail, pick.name, today, time, lat, lng,Math.round(dist), String(body.source || 'app').slice(0, 30));
       return json(res, 201, { ok: true, checkedIn: true, already: false, id: checkinId, time: time, distance: Math.round(dist) });
     }
 
@@ -1302,13 +1312,14 @@ var myGymStoreIds = scanRows('SELECT store_id FROM gym_members WHERE email = ?',
       if (!saveStore) return json(res, 404, { error: 'Gym store not found.' });
       if (requireStoreOwner(res, user, saveStore)) return;
       switchToStoreOwner(saveStore.id);
-      if (!Array.isArray(body.plans)) return json(res, 400, { error: 'plans array required.' });
+if (!Array.isArray(body.plans)) return json(res, 400, { error: 'plans array required.' });
+      if (body.plans.length > 50) return json(res, 400, { error: 'Too many plans.' });
       db.prepare('DELETE FROM gym_plans WHERE store_id = ?').run(saveStore.id);
       var insPlan = db.prepare('INSERT INTO gym_plans (id, store_id, name, price, duration, duration_days, features, featured) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
       body.plans.forEach(function(p) {
         var name = String(p.name || '').slice(0, 120);
         if (!name) return;
-        insPlan.run('gp_' + generateId(), saveStore.id, name, Number(p.price || 0), Number(p.duration || 30), Number(p.duration_days || p.duration || 30), JSON.stringify(Array.isArray(p.features) ? p.features : []), p.featured ? 1 : 0);
+insPlan.run('gp_' + generateId(), saveStore.id, name, Math.min(100000000, Math.max(0, Number(p.price) || 0)), Math.min(3650, Math.max(1, Math.floor(Number(p.duration) || 30))), Math.min(3650, Math.max(1, Math.floor(Number(p.duration_days || p.duration) || 30))), JSON.stringify(Array.isArray(p.features) ? p.features.slice(0, 30) : []), p.featured ? 1 : 0);
       });
       return json(res, 200, { ok: true, store_id: saveStore.id, plans: db.prepare('SELECT * FROM gym_plans WHERE store_id = ? ORDER BY price ASC').all(saveStore.id) });
     }
@@ -1377,7 +1388,7 @@ function actingEmail(bodyEmail, store) {
       if (!cName) return json(res, 400, { error: 'Class name required.' });
       var cId = 'gcl_' + generateId();
       db.prepare('INSERT INTO gym_classes (id, store_id, name, trainer_id, trainer_name, description, day, start_time, end_time, capacity, color, is_recurring, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(cId, cStore.id, cName, String(body.trainer_id || ''), String(body.trainer_name || ''), String(body.description || ''), Number(body.day || 0), String(body.start_time || '09:00'), String(body.end_time || '10:00'), Number(body.capacity || 20), String(body.color || '#38bdf8'), body.is_recurring === 0 ? 0 : 1, body.status === 'inactive' ? 'inactive' : 'active');
+        .run(cId, cStore.id, cName.slice(0, 200), String(body.trainer_id || '').slice(0, 60), String(body.trainer_name || '').slice(0, 200), String(body.description || '').slice(0, 2000), Math.min(7, Math.max(0, Math.floor(Number(body.day) || 0))), String(body.start_time || '09:00').slice(0, 10), String(body.end_time || '10:00').slice(0, 10), Math.min(1000, Math.max(1, Math.floor(Number(body.capacity) || 20))), String(body.color || '#38bdf8').slice(0, 20), body.is_recurring === 0 ? 0 : 1, body.status === 'inactive' ? 'inactive' : 'active');
       return json(res, 201, { ok: true, id: cId, class: db.prepare('SELECT * FROM gym_classes WHERE id = ?').get(cId) });
     }
 
@@ -1392,7 +1403,7 @@ function actingEmail(bodyEmail, store) {
       var cuRow = db.prepare('SELECT * FROM gym_classes WHERE id = ? AND store_id = ?').get(cuId, cuStore.id);
       if (!cuRow) return json(res, 404, { error: 'Class not found.' });
       db.prepare('UPDATE gym_classes SET name = ?, trainer_id = ?, trainer_name = ?, description = ?, day = ?, start_time = ?, end_time = ?, capacity = ?, color = ?, is_recurring = ?, status = ? WHERE id = ?')
-        .run(String(body.name || cuRow.name), String(body.trainer_id || ''), String(body.trainer_name || ''), String(body.description || ''), Number(body.day != null ? body.day : cuRow.day), String(body.start_time || cuRow.start_time), String(body.end_time || cuRow.end_time), Number(body.capacity || cuRow.capacity), String(body.color || cuRow.color), body.is_recurring === 0 ? 0 : 1, body.status === 'inactive' ? 'inactive' : 'active', cuId);
+.run(String(body.name || cuRow.name).trim().slice(0, 200) || cuRow.name, String(body.trainer_id || '').slice(0, 60), String(body.trainer_name || '').slice(0, 200), String(body.description || '').slice(0, 2000), Math.min(7, Math.max(0, Math.floor(Number(body.day != null ? body.day : cuRow.day) || 0))), String(body.start_time || cuRow.start_time).slice(0, 10), String(body.end_time || cuRow.end_time).slice(0, 10), Math.min(1000, Math.max(1, Math.floor(Number(body.capacity || cuRow.capacity) || 20))), String(body.color || cuRow.color).slice(0, 20), body.is_recurring === 0 ? 0 : 1, body.status === 'inactive' ? 'inactive' : 'active', cuId);
       return json(res, 200, { ok: true });
     }
 
@@ -1497,7 +1508,7 @@ var pMember = findGymMemberById(db, pMid, pStore.id);
       var psMid = String(body.member_id || '');
 if (!findGymMemberById(db, psMid, psStore.id)) return json(res, 404, { error: 'Member not found.' });
       var exists = db.prepare('SELECT id FROM gym_member_profiles WHERE member_id = ?').get(psMid);
-      var vals = [Number(body.height_cm || 0), String(body.gender || ''), String(body.dob || ''), String(body.goal || ''), String(body.activity_level || 'moderate'), String(body.health_conditions || ''), String(body.emergency_contact || ''), String(body.emergency_phone || ''), String(body.notes || '')];
+var vals = [Math.min(300, Math.max(0, Number(body.height_cm) || 0)), String(body.gender || '').slice(0, 30), String(body.dob || '').slice(0, 20), String(body.goal || '').slice(0, 200), String(body.activity_level || 'moderate').slice(0, 30), String(body.health_conditions || '').slice(0, 1000), String(body.emergency_contact || '').slice(0, 200), String(body.emergency_phone || '').slice(0, 40), String(body.notes || '').slice(0, 2000)];
       if (exists) {
         var upStmt = db.prepare('UPDATE gym_member_profiles SET height_cm = ?, gender = ?, dob = ?, goal = ?, activity_level = ?, health_conditions = ?, emergency_contact = ?, emergency_phone = ?, notes = ?, updated_at = datetime(\'now\') WHERE member_id = ?');
         upStmt.run.apply(upStmt, vals.concat([psMid]));
@@ -1519,12 +1530,12 @@ if (!findGymMemberById(db, psMid, psStore.id)) return json(res, 404, { error: 'M
       var mmid = String(body.member_id || '');
 var mmember = findGymMemberById(db, mmid, mStore.id);
       if (!mmember) return json(res, 404, { error: 'Member not found.' });
-      var w = Number(body.weight_kg || 0);
-      var h = Number(body.height_cm || 0);
+var w = Math.min(1000, Math.max(0, Number(body.weight_kg) || 0));
+var h = Math.min(300, Math.max(0, Number(body.height_cm) || 0));
       var bmi = h > 0 ? Math.round((w / ((h / 100) * (h / 100))) * 10) / 10 : 0;
       var mId = 'gbm_' + generateId();
       db.prepare('INSERT INTO gym_body_metrics (id, store_id, member_id, weight_kg, body_fat, muscle_kg, bmi, chest_cm, waist_cm, hip_cm, bicep_cm, thigh_cm, measured_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))')
-        .run(mId, mStore.id, mmid, w, Number(body.body_fat || 0), Number(body.muscle_kg || 0), bmi, Number(body.chest_cm || 0), Number(body.waist_cm || 0), Number(body.hip_cm || 0), Number(body.bicep_cm || 0), Number(body.thigh_cm || 0));
+        .run(mId, mStore.id, mmid, w, Math.min(1000, Math.max(0, Number(body.body_fat) || 0)), Math.min(1000, Math.max(0, Number(body.muscle_kg) || 0)), bmi, Math.min(1000, Math.max(0, Number(body.chest_cm) || 0)), Math.min(1000, Math.max(0, Number(body.waist_cm) || 0)), Math.min(1000, Math.max(0, Number(body.hip_cm) || 0)), Math.min(1000, Math.max(0, Number(body.bicep_cm) || 0)), Math.min(1000, Math.max(0, Number(body.thigh_cm) || 0)));
       return json(res, 201, { ok: true, id: mId, bmi: bmi, metrics: db.prepare('SELECT * FROM gym_body_metrics WHERE member_id = ? ORDER BY measured_at ASC').all(mmid) });
     }
 
@@ -1727,7 +1738,7 @@ if (horizon > 90) horizon = 90;
         var classes = db.prepare('SELECT * FROM gym_classes WHERE store_id = ?').all(anStore.id);
         classStats = classes.map(function(c) {
           var b = db.prepare('SELECT COUNT(*) as c FROM gym_class_bookings WHERE class_id = ? AND status = ?').get(c.id, 'booked').c;
-          return { id: c.id, name: c.name, capacity: c.capacity, enrolled: b, utilization: Math.min(100, Math.round((b / c.capacity) * 100)), day: c.day, start_time: c.start_time };
+          return { id: c.id, name: c.name, capacity: c.capacity, enrolled: b,utilization: Math.min(100, Math.round((b / (Number(c.capacity) || 1)) * 100)), day: c.day, start_time: c.start_time };
         }).sort(function(a, b) { return b.utilization - a.utilization; });
       } catch(e){}
       var totalRevenue = 0;
@@ -1760,12 +1771,12 @@ if (horizon > 90) horizon = 90;
         var stRow = db.prepare('SELECT * FROM gym_staff WHERE id = ? AND store_id = ?').get(stId, st2.id);
         if (!stRow) return json(res, 404, { error: 'Staff not found.' });
         db.prepare('UPDATE gym_staff SET name = ?, role = ?, email = ?, phone = ?, salary = ?, commission_pct = ?, specialty = ?, active = ?, joined = ? WHERE id = ?')
-          .run(stName, body.role || stRow.role, String(body.email || ''), String(body.phone || ''), Number(body.salary || 0), Number(body.commission_pct || 0), String(body.specialty || ''), body.active === 0 ? 0 : 1, String(body.joined || stRow.joined), stId);
+.run(stName.slice(0, 200), String(body.role || stRow.role).slice(0, 60), String(body.email || '').slice(0, 200), String(body.phone || '').slice(0, 40), Math.min(100000000, Math.max(0, Number(body.salary) || 0)), Math.min(100, Math.max(0, Number(body.commission_pct) || 0)), String(body.specialty || '').slice(0, 200), body.active === 0 ? 0 : 1, String(body.joined || stRow.joined).slice(0, 20), stId);
         return json(res, 200, { ok: true });
       }
       var nStaff = 'gst_' + generateId();
       db.prepare('INSERT INTO gym_staff (id, store_id, name, role, email, phone, salary, commission_pct, specialty, active, joined) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(nStaff, st2.id, stName, body.role || 'trainer', String(body.email || ''), String(body.phone || ''), Number(body.salary || 0), Number(body.commission_pct || 0), String(body.specialty || ''), body.active === 0 ? 0 : 1, String(body.joined || new Date().toISOString().slice(0, 10)));
+.run(nStaff, st2.id, stName.slice(0, 200), String(body.role || 'trainer').slice(0, 60), String(body.email || '').slice(0, 200), String(body.phone || '').slice(0, 40), Math.min(100000000, Math.max(0, Number(body.salary) || 0)), Math.min(100, Math.max(0, Number(body.commission_pct) || 0)), String(body.specialty || '').slice(0, 200), body.active === 0 ? 0 : 1, String(body.joined || new Date().toISOString().slice(0, 10)).slice(0, 20));
       return json(res, 201, { ok: true, id: nStaff });
     }
 
@@ -2657,7 +2668,7 @@ blkIds = blkIds.slice(0, 100);
       if (!body.name) return json(res, 400, { error: 'name is required.' });
       var stfId = 'stf_' + generateId();
       db.prepare('INSERT INTO staff_members (id, store_id, name, role, phone, email, salary, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))')
-        .run(stfId, stfStoreId, String(body.name), String(body.role || 'staff'), String(body.phone || ''), String(body.email || ''), Number(body.salary) || 0, 'active');
+.run(stfId, stfStoreId, String(body.name).trim().slice(0, 200), String(body.role || 'staff').slice(0, 60), String(body.phone || '').slice(0, 40), String(body.email || '').slice(0, 200), Math.min(100000000, Math.max(0, Number(body.salary) || 0)), 'active');
       return json(res, 200, { staff: db.prepare('SELECT * FROM staff_members WHERE id = ?').get(stfId) });
     }
 
@@ -2679,12 +2690,12 @@ blkIds = blkIds.slice(0, 100);
       var stfPatchRow = db.prepare('SELECT * FROM staff_members WHERE id = ? AND store_id = ?').get(stfPatchId, stfPatchStoreId);
       if (!stfPatchRow) return json(res, 404, { error: 'Staff member not found.' });
       db.prepare('UPDATE staff_members SET name = ?, role = ?, phone = ?, email = ?, salary = ?, status = ? WHERE id = ?').run(
-        body.name != null ? String(body.name) : stfPatchRow.name,
-        body.role != null ? String(body.role) : stfPatchRow.role,
-        body.phone != null ? String(body.phone) : stfPatchRow.phone,
-        body.email != null ? String(body.email) : stfPatchRow.email,
-        body.salary != null ? Number(body.salary) : stfPatchRow.salary,
-        body.status != null ? String(body.status) : stfPatchRow.status,
+body.name != null ? (String(body.name).trim().slice(0, 200) || stfPatchRow.name) : stfPatchRow.name,
+body.role != null ? String(body.role).slice(0, 60) : stfPatchRow.role,
+body.phone != null ? String(body.phone).slice(0, 40) : stfPatchRow.phone,
+        body.email != null ? String(body.email).slice(0, 200) : stfPatchRow.email,
+body.salary != null ? Math.min(100000000, Math.max(0, Number(body.salary) || 0)) : stfPatchRow.salary,
+body.status != null ? String(body.status).trim().slice(0, 30) : stfPatchRow.status,
         stfPatchId
       );
       return json(res, 200, { staff: db.prepare('SELECT * FROM staff_members WHERE id = ?').get(stfPatchId) });
@@ -2707,12 +2718,12 @@ blkIds = blkIds.slice(0, 100);
       if (!expStore) return json(res, 404, { error: 'Store not found.' });
       if (requireStoreOwner(res, user, expStore)) return null;
       var expAmount = Number(body.amount);
-      if (!body.title || !isFinite(expAmount) || expAmount <= 0) {
+if (!body.title || !isFinite(expAmount) || expAmount <= 0 || expAmount > 100000000) {
         return json(res, 400, { error: 'title and a positive amount are required.' });
       }
       var expId = 'exp_' + generateId();
       db.prepare('INSERT INTO business_expenses (id, store_id, title, category, amount, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))')
-        .run(expId, expStoreId, String(body.title), String(body.category || 'general'), expAmount, String(body.note || ''), actorName);
+       .run(expId, expStoreId, String(body.title).trim().slice(0, 200), String(body.category || 'general').slice(0, 60), expAmount, String(body.note || '').slice(0, 1000), actorName);
       return json(res, 200, { expense: db.prepare('SELECT * FROM business_expenses WHERE id = ?').get(expId) });
     }
 
