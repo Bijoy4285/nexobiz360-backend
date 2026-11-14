@@ -694,10 +694,11 @@ if (body.slug !== undefined) {
       var store = db.prepare('SELECT * FROM reg.stores WHERE id = ?').get(storeId);
       if (!store) return json(res, 404, { error: 'Store not found.' });
       if (requireStoreOwner(res, user, store)) return;
-      if (!body.name) return json(res, 400, { error: 'Category name is required.' });
+var catPostName = String(body.name || '').trim().slice(0, 100);
+      if (!catPostName) return json(res, 400, { error: 'Category name is required.' });
       var catId = 'cat_' + generateId();
       var maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order), 0) + 1 as next FROM menu_categories WHERE store_id = ?').get(storeId).next;
-      db.prepare('INSERT INTO menu_categories (id, store_id, name, sort_order) VALUES (?, ?, ?, ?)').run(catId, storeId, body.name, body.sort_order || maxOrder);
+      db.prepare('INSERT INTO menu_categories (id, store_id, name, sort_order) VALUES (?, ?, ?, ?)').run(catId, storeId, catPostName, (isFinite(Number(body.sort_order)) && Number(body.sort_order)) || maxOrder);
       return json(res, 201, { ok: true, category: db.prepare('SELECT * FROM menu_categories WHERE id = ?').get(catId) });
     }
 
@@ -725,7 +726,12 @@ if (menuPostStock > 100000000) menuPostStock = 100000000;
 var menuPostCost = body.cost_price === undefined ? 0 : Number(body.cost_price);
 if (!isFinite(menuPostCost) || menuPostCost < 0) return json(res, 400, { error: 'Invalid cost price.' });
 if (menuPostCost > 100000000) menuPostCost = 100000000;
-      var categoryId = body.category_id || null;
+var categoryId = body.category_id || null;
+      if (categoryId) {
+        var menuPostCat = db.prepare('SELECT id FROM menu_categories WHERE id = ? AND store_id = ?').get(String(categoryId), storeId);
+        if (!menuPostCat) return json(res, 400, { error: 'Invalid category.' });
+        categoryId = menuPostCat.id;
+      }
       if (!categoryId && body.category_name) {
         var catRow = db.prepare('SELECT id FROM menu_categories WHERE store_id = ? AND lower(name) = lower(?)').get(storeId, body.category_name);
         if (catRow) {
@@ -733,7 +739,7 @@ if (menuPostCost > 100000000) menuPostCost = 100000000;
         } else {
           categoryId = 'cat_' + generateId();
           var catMaxOrder = db.prepare('SELECT COALESCE(MAX(sort_order), 0) + 1 as next FROM menu_categories WHERE store_id = ?').get(storeId).next;
-          db.prepare('INSERT INTO menu_categories (id, store_id, name, sort_order) VALUES (?, ?, ?, ?)').run(categoryId, storeId, body.category_name, catMaxOrder);
+          db.prepare('INSERT INTO menu_categories (id, store_id, name, sort_order) VALUES (?, ?, ?, ?)').run(categoryId, storeId, String(body.category_name).slice(0, 100), catMaxOrder);
         }
       }
       var itemId = 'item_' + generateId();
@@ -824,7 +830,7 @@ var orderId = 'ord_' + generateId();
 
   var isOrderOwner = canManageStore(user, store);
   if (body.items.length > 50) return json(res, 400, { error: 'Too many items.' });
-  var menuPriceMap = {};
+var menuPriceMap = Object.create(null);
   try { db.prepare('SELECT id, price FROM menu_items WHERE store_id = ?').all(storeId).forEach(function(r) { menuPriceMap[String(r.id)] = Number(r.price) || 0; }); } catch(e) {}
   var subtotal = 0;
   for (var oi = 0; oi < body.items.length; oi++) {
@@ -1540,6 +1546,7 @@ var days = Math.floor(Number(body.days || 0));
         days = (planRow && planRow.duration_days) ? Number(planRow.duration_days) : 30;
       }
       var base = rMember.expiry && String(rMember.expiry) >= new Date().toISOString().slice(0, 10) ? new Date(String(rMember.expiry) + 'T23:59:59') : new Date();
+    if (!isFinite(days) || days < 1 || days > 730) return json(res, 400, { error: 'Days must be between 1 and 730.' });
       base.setDate(base.getDate() + days);
       var newExpiry = base.toISOString().slice(0, 10);
 var amount = Number(body.amount != null ? body.amount : rMember.price || 0);
@@ -1547,7 +1554,7 @@ if (!isFinite(amount) || amount < 0) amount = 0;
       db.prepare('UPDATE gym_members SET expiry = ?, status = ?, updated_at = datetime(\'now\'), last_renewed = datetime(\'now\') WHERE id = ?').run(newExpiry, 'Active', rMid);
       var payId = 'gpay_' + generateId();
       db.prepare('INSERT INTO gym_member_payments (id, store_id, member_id, member_email, member_name, type, amount, method, reference, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(payId, rStore.id, rMid, rMember.email, rMember.name, body.type || 'renewal', amount, body.method || 'cash', String(body.reference || ''), 'Renewed ' + days + ' days');
+.run(payId, rStore.id, rMid, rMember.email, rMember.name, String(body.type || 'renewal').slice(0, 30), amount, String(body.method || 'cash').slice(0, 30), String(body.reference || '').slice(0, 120), 'Renewed ' + days + ' days');
       return json(res, 200, { ok: true, expiry: newExpiry, days: days, amount: amount });
     }
 
@@ -2044,17 +2051,17 @@ var tQuery = String(body.query || '').slice(0, 1000);
       if (requireStoreOwner(res, user, saStore)) return null;
       var saItemId = String(body.item_id || '');
       var saQtyChange = Number(body.qty_change);
-      if (!saItemId || !isFinite(saQtyChange) || saQtyChange === 0) {
+if (!saItemId || !isFinite(saQtyChange) || saQtyChange === 0 || Math.abs(saQtyChange) > 1000000) {
         return json(res, 400, { error: 'item_id and non-zero qty_change are required.' });
       }
       var saResult = adjustStock(saStoreId, saItemId, saQtyChange, 'manual_adjustment', {
-        reason: String(body.reason || ''), createdBy: actorName, refType: 'stock_adjustment'
+reason: String(body.reason || '').slice(0, 300), createdBy: actorName, refType: 'stock_adjustment'
       });
       if (!saResult) return json(res, 404, { error: 'Item not found.' });
       if (saResult.error) return json(res, 400, { error: saResult.error, available: saResult.available });
       var saId = 'sa_' + generateId();
       db.prepare('INSERT INTO stock_adjustments (id, store_id, item_id, item_name, qty_change, reason, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))')
-        .run(saId, saStoreId, saItemId, saResult.item_name, saQtyChange, String(body.reason || ''), actorName);
+.run(saId, saStoreId, saItemId, saResult.item_name, saQtyChange, String(body.reason || '').slice(0, 300), actorName);
       return json(res, 200, { id: saId, result: saResult });
     }
 
@@ -2097,21 +2104,22 @@ var tQuery = String(body.query || '').slice(0, 1000);
       if (requireStoreOwner(res, user, poStore)) return null;
       var poItemsIn = Array.isArray(body.items) ? body.items : [];
       if (!poItemsIn.length) return json(res, 400, { error: 'At least one item is required.' });
+      if (poItemsIn.length > 200) return json(res, 400, { error: 'Too many items.' });
 var poBad = false;
 poItemsIn.forEach(function(it) {
   var q = Number(it && it.qty_ordered) || 0;
   var c = Number(it && it.unit_cost) || 0;
-  if (!isFinite(q) || q < 0 || !isFinite(c) || c < 0) poBad = true;
+if (!isFinite(q) || q < 0 || q > 1000000 || !isFinite(c) || c < 0 || c > 100000000) poBad = true;
 });
 if (poBad) return json(res, 400, { error: 'Quantities and costs must be zero or positive numbers.' });
 var poId = 'po_' + generateId();
       var poTotal = 0;
       poItemsIn.forEach(function(it) { poTotal += (Number(it.qty_ordered) || 0) * (Number(it.unit_cost) || 0); });
       db.prepare('INSERT INTO purchase_orders (id, store_id, supplier_name, supplier_phone, status, notes, total_cost, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))')
-        .run(poId, poStoreId, String(body.supplier_name || ''), String(body.supplier_phone || ''), 'draft', String(body.notes || ''), poTotal, actorName);
+.run(poId, poStoreId, String(body.supplier_name || '').slice(0, 200), String(body.supplier_phone || '').slice(0, 40), 'draft', String(body.notes || '').slice(0, 1000), poTotal, actorName);
       poItemsIn.forEach(function(it) {
         db.prepare('INSERT INTO purchase_order_items (id, po_id, item_id, item_name, qty_ordered, qty_received, unit_cost) VALUES (?, ?, ?, ?, ?, 0, ?)')
-          .run('poi_' + generateId(), poId, String(it.item_id || ''), String(it.item_name || ''), Number(it.qty_ordered) || 0, Number(it.unit_cost) || 0);
+.run('poi_' + generateId(), poId, String(it.item_id || '').slice(0, 60), String(it.item_name || '').slice(0, 200), Number(it.qty_ordered) || 0, Number(it.unit_cost) || 0);
       });
       return json(res, 200, {
         purchase_order: db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(poId),
@@ -2153,11 +2161,13 @@ var poId = 'po_' + generateId();
       if (poPatchRow.status === 'received' || poPatchRow.status === 'cancelled') {
         return json(res, 400, { error: 'Cannot edit a ' + poPatchRow.status + ' purchase order.' });
       }
+var poPatchStatus = body.status != null ? String(body.status).trim().toLowerCase() : poPatchRow.status;
+      if (body.status != null && (!/^[a-z_]{1,30}$/.test(poPatchStatus) || poPatchStatus === 'received' || poPatchStatus === 'partial')) return json(res, 400, { error: 'Invalid status.' });
       db.prepare('UPDATE purchase_orders SET status = ?, notes = ?, supplier_name = ?, supplier_phone = ? WHERE id = ?').run(
-        body.status != null ? String(body.status) : poPatchRow.status,
-        body.notes != null ? String(body.notes) : poPatchRow.notes,
-        body.supplier_name != null ? String(body.supplier_name) : poPatchRow.supplier_name,
-        body.supplier_phone != null ? String(body.supplier_phone) : poPatchRow.supplier_phone,
+poPatchStatus,
+        body.notes != null ? String(body.notes).slice(0, 1000) : poPatchRow.notes,
+body.supplier_name != null ? String(body.supplier_name).slice(0, 200) : poPatchRow.supplier_name,
+body.supplier_phone != null ? String(body.supplier_phone).slice(0, 40) : poPatchRow.supplier_phone,
         poPatchId
       );
       return json(res, 200, { purchase_order: db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(poPatchId) });
@@ -2223,15 +2233,19 @@ if (poRecvAdjustResult && !poRecvAdjustResult.error) {
         return json(res, 400, { error: 'Transfers are only allowed between your own stores.' });
       }
       var toItemsIn = Array.isArray(body.items) ? body.items : [];
-      if (!toItemsIn.length) return json(res, 400, { error: 'At least one item is required.' });
-var toMerged = {};
+if (!toItemsIn.length) return json(res, 400, { error: 'At least one item is required.' });
+      if (toItemsIn.length > 200) return json(res, 400, { error: 'Too many items.' });
+var toMerged = Object.create(null);
 var toBad = false;
 toItemsIn.forEach(function(it) {
   var q = Number(it && it.qty) || 0;
   var iid = String((it && it.item_id) || '');
-  if (!isFinite(q) || q < 0 || (q > 0 && !iid)) { toBad = true; return; }
+if (!isFinite(q) || q < 0 || q > 1000000 || (q > 0 && !iid)) { toBad = true; return; }
   if (q === 0) return;
-  if (!toMerged[iid]) toMerged[iid] = { item_id: iid, item_name: String(it.item_name || '').slice(0, 200), qty: 0, unit_cost: Number(it.unit_cost) || 0 };
+var toUnitCost = Number(it.unit_cost);
+  if (!isFinite(toUnitCost) || toUnitCost < 0) toUnitCost = 0;
+  if (toUnitCost > 100000000) toUnitCost = 100000000;
+  if (!toMerged[iid]) toMerged[iid] = { item_id: iid, item_name: String(it.item_name || '').slice(0, 200), qty: 0, unit_cost: toUnitCost };
   toMerged[iid].qty += q;
 });
 if (toBad) return json(res, 400, { error: 'Each transfer item needs an item_id and a non-negative quantity.' });
@@ -2239,7 +2253,7 @@ toItemsIn = Object.keys(toMerged).map(function(k) { return toMerged[k]; });
 if (!toItemsIn.length) return json(res, 400, { error: 'At least one item with a positive quantity is required.' });
 var toId = 'to_' + generateId();
       db.prepare('INSERT INTO transfer_orders (id, from_store_id, to_store_id, status, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime(\'now\'))')
-        .run(toId, toFromId, toToId, 'pending', String(body.note || ''), actorName);
+.run(toId, toFromId, toToId, 'pending', String(body.note || '').slice(0, 500), actorName);
       toItemsIn.forEach(function(it) {
         db.prepare('INSERT INTO transfer_order_items (id, transfer_id, item_id, item_name, qty, unit_cost) VALUES (?, ?, ?, ?, ?, ?)')
           .run('toi_' + generateId(), toId, String(it.item_id || ''), String(it.item_name || ''), Number(it.qty) || 0, Number(it.unit_cost) || 0);
@@ -2337,10 +2351,10 @@ var toRecvNotes = [];
       if (requireStoreOwner(res, user, icStore)) return null;
       var icId = 'ic_' + generateId();
       db.prepare('INSERT INTO inventory_counts (id, store_id, status, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, datetime(\'now\'))')
-        .run(icId, icStoreId, 'draft', String(body.note || ''), actorName);
-      var icExplicitIds = Array.isArray(body.item_ids) ? body.item_ids : null;
+       .run(icId, icStoreId, 'draft', String(body.note || '').slice(0, 500), actorName);
+var icExplicitIds = Array.isArray(body.item_ids) ? body.item_ids.slice(0, 1000) : null;
       var icItemsSrc = icExplicitIds && icExplicitIds.length
-        ? icExplicitIds.map(function(id) { return db.prepare('SELECT * FROM menu_items WHERE id = ? AND store_id = ?').get(id, icStoreId); }).filter(Boolean)
+        ? icExplicitIds.map(function(id) { return db.prepare('SELECT * FROM menu_items WHERE id = ? AND store_id = ?').get(String(id), icStoreId); }).filter(Boolean)
         : db.prepare('SELECT * FROM menu_items WHERE store_id = ? AND stock_qty >= 0').all(icStoreId);
       icItemsSrc.forEach(function(it) {
         var exp = Number(it.stock_qty) >= 0 ? Number(it.stock_qty) : 0;
@@ -2384,12 +2398,13 @@ var toRecvNotes = [];
       if (icSubRow.status === 'finalized' || icSubRow.status === 'cancelled') {
         return json(res, 400, { error: 'Cannot submit a ' + icSubRow.status + ' count.' });
       }
-      var icSubItems = Array.isArray(body.items) ? body.items : [];
+var icSubItems = Array.isArray(body.items) ? body.items.slice(0, 2000) : [];
       icSubItems.forEach(function(it) {
         var row = db.prepare('SELECT * FROM inventory_count_items WHERE count_id = ? AND item_id = ?').get(icSubId, it.item_id);
         if (row) {
          var counted = Number(it.counted_qty);
 if (!isFinite(counted) || counted < 0) counted = 0;
+         if (counted > 100000000) counted = 100000000;
           db.prepare('UPDATE inventory_count_items SET counted_qty = ?, variance = ? WHERE id = ?').run(counted, counted - Number(row.expected_qty), row.id);
         }
       });
@@ -2438,10 +2453,24 @@ if (!isFinite(counted) || counted < 0) counted = 0;
       if (!prStore) return json(res, 404, { error: 'Store not found.' });
       if (requireStoreOwner(res, user, prStore)) return null;
       var prIngredients = Array.isArray(body.ingredients) ? body.ingredients : [];
-      if (!body.output_item_id || !prIngredients.length) return json(res, 400, { error: 'output_item_id and ingredients are required.' });
+if (!body.output_item_id || !prIngredients.length) return json(res, 400, { error: 'output_item_id and ingredients are required.' });
+      if (prIngredients.length > 100) return json(res, 400, { error: 'Too many ingredients.' });
+      var prYield = Number(body.yield_qty) || 1;
+      if (!isFinite(prYield) || prYield <= 0 || prYield > 1000000) return json(res, 400, { error: 'Invalid yield_qty.' });
+      if (!db.prepare('SELECT id FROM menu_items WHERE id = ? AND store_id = ?').get(String(body.output_item_id), prStoreId)) return json(res, 404, { error: 'Output item not found.' });
+      var prCleanIngredients = [];
+      for (var pci = 0; pci < prIngredients.length; pci++) {
+        var pcIng = prIngredients[pci] || {};
+        var pcQty = Number(pcIng.qty);
+        var pcItemId = String(pcIng.item_id || '');
+        if (!isFinite(pcQty) || pcQty < 0 || pcQty > 1000000 || (pcQty > 0 && !pcItemId)) return json(res, 400, { error: 'Each ingredient needs an item_id and a non-negative quantity.' });
+        if (pcQty === 0) continue;
+        prCleanIngredients.push({ item_id: pcItemId.slice(0, 60), item_name: String(pcIng.item_name || '').slice(0, 200), qty: pcQty });
+      }
+      if (!prCleanIngredients.length) return json(res, 400, { error: 'At least one ingredient with a positive quantity is required.' });
       var prId = 'pr_' + generateId();
       db.prepare('INSERT INTO production_recipes (id, store_id, output_item_id, output_item_name, yield_qty, ingredients_json, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime(\'now\'))')
-        .run(prId, prStoreId, String(body.output_item_id), String(body.output_item_name || ''), Number(body.yield_qty) || 1, JSON.stringify(prIngredients));
+.run(prId, prStoreId, String(body.output_item_id).slice(0, 60), String(body.output_item_name || '').slice(0, 200), prYield, JSON.stringify(prCleanIngredients));
       return json(res, 200, { recipe: db.prepare('SELECT * FROM production_recipes WHERE id = ?').get(prId) });
     }
 
@@ -2474,8 +2503,8 @@ var proQty = Number(body.qty_produced);
 if (!isFinite(proQty)) proQty = 0;
 if (!isFinite(proQty) || proQty <= 0 || proQty > 1000000) return json(res, 400, { error: 'qty_produced must be greater than 0 and at most 1000000.' });
       var proOutputId = String(body.output_item_id || '');
-      var proOutputName = String(body.output_item_name || '');
-      var proIngredients = Array.isArray(body.ingredients) ? body.ingredients.slice() : null;
+var proOutputName = String(body.output_item_name || '').slice(0, 200);
+var proIngredients = Array.isArray(body.ingredients) ? body.ingredients.slice(0, 100) : null;
       var proRecipeId = body.recipe_id ? String(body.recipe_id) : '';
       if (!proIngredients && proRecipeId) {
         var proRecipe = db.prepare('SELECT * FROM production_recipes WHERE id = ? AND store_id = ?').get(proRecipeId, proStoreId);
@@ -2490,14 +2519,14 @@ if (!isFinite(proQty) || proQty <= 0 || proQty > 1000000) return json(res, 400, 
       if (!proIngredients || !proIngredients.length || !proOutputId) {
         return json(res, 400, { error: 'output_item_id and ingredients (or recipe_id) are required.' });
       }
-     var proMerged = {};
+var proMerged = Object.create(null);
 var proBad = false;
 proIngredients.forEach(function(ing) {
   var q = Number(ing && ing.qty) || 0;
   var iid = String((ing && ing.item_id) || '');
-  if (!isFinite(q) || q < 0 || (q > 0 && !iid)) { proBad = true; return; }
+if (!isFinite(q) || q < 0 || q > 1000000 || (q > 0 && !iid)) { proBad = true; return; }
   if (q === 0) return;
-  if (!proMerged[iid]) proMerged[iid] = { item_id: iid, item_name: String(ing.item_name || ''), qty: 0 };
+if (!proMerged[iid]) proMerged[iid] = { item_id: iid, item_name: String(ing.item_name || '').slice(0, 200), qty: 0 };
   proMerged[iid].qty += q;
 });
 if (proBad) return json(res, 400, { error: 'Each ingredient needs an item_id and a non-negative quantity.' });
