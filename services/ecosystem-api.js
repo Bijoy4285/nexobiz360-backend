@@ -748,10 +748,24 @@ if (menuPostCost > 100000000) menuPostCost = 100000000;
       var existing = db.prepare('SELECT i.*, s.owner_id FROM menu_items i LEFT JOIN reg.stores s ON s.id = i.store_id WHERE i.id = ?').get(itemId);
       if (!existing) return json(res, 404, { error: 'Item not found.' });
       if (requireStoreOwner(res, user, existing)) return;
-      if (body.name !== undefined) existing.name = body.name;
-      if (body.description !== undefined) existing.description = body.description;
-      if (body.price !== undefined) existing.price = body.price;
-      if (body.category_id !== undefined) existing.category_id = body.category_id;
+      if (body.name !== undefined) {
+        var itemPutName = String(body.name).trim().slice(0, 200);
+        if (!itemPutName) return json(res, 400, { error: 'Item name is required.' });
+        existing.name = itemPutName;
+      }
+      if (body.description !== undefined) existing.description = String(body.description || '').slice(0, 2000);
+if (body.price !== undefined) {
+        var itemPutPrice = Number(body.price);
+        if (!isFinite(itemPutPrice) || itemPutPrice < 0 || itemPutPrice > 100000000) return json(res, 400, { error: 'Invalid price.' });
+        existing.price = itemPutPrice;
+      }
+if (body.category_id !== undefined) {
+        if (body.category_id) {
+          var itemPutCat = db.prepare('SELECT id FROM menu_categories WHERE id = ? AND store_id = ?').get(String(body.category_id), existing.store_id);
+          if (!itemPutCat) return json(res, 400, { error: 'Invalid category.' });
+        }
+        existing.category_id = body.category_id;
+      }
       if (body.category_name !== undefined && body.category_id === undefined) {
         var catRow2 = db.prepare('SELECT id FROM menu_categories WHERE store_id = ? AND lower(name) = lower(?)').get(existing.store_id, body.category_name);
         if (catRow2) {
@@ -759,15 +773,23 @@ if (menuPostCost > 100000000) menuPostCost = 100000000;
         } else {
           var newCatId = 'cat_' + generateId();
           var catMaxOrder2 = db.prepare('SELECT COALESCE(MAX(sort_order), 0) + 1 as next FROM menu_categories WHERE store_id = ?').get(existing.store_id).next;
-          db.prepare('INSERT INTO menu_categories (id, store_id, name, sort_order) VALUES (?, ?, ?, ?)').run(newCatId, existing.store_id, body.category_name, catMaxOrder2);
+db.prepare('INSERT INTO menu_categories (id, store_id, name, sort_order) VALUES (?, ?, ?, ?)').run(newCatId, existing.store_id, String(body.category_name).slice(0, 100), catMaxOrder2);
           existing.category_id = newCatId;
         }
       }
       if (body.image_url !== undefined) existing.image_url = body.image_url;
       if (body.is_available !== undefined) existing.is_available = body.is_available ? 1 : 0;
-      if (body.barcode !== undefined) existing.barcode = body.barcode;
-      if (body.stock_qty !== undefined) existing.stock_qty = Number(body.stock_qty);
-      if (body.cost_price !== undefined) existing.cost_price = Number(body.cost_price);
+if (body.barcode !== undefined) existing.barcode = String(body.barcode || '').slice(0, 100);
+if (body.stock_qty !== undefined) {
+        var itemPutStock = Number(body.stock_qty);
+        if (!isFinite(itemPutStock) || itemPutStock < -1 || itemPutStock > 100000000) return json(res, 400, { error: 'Invalid stock quantity.' });
+        existing.stock_qty = itemPutStock;
+      }
+     if (body.cost_price !== undefined) {
+        var itemPutCost = Number(body.cost_price);
+        if (!isFinite(itemPutCost) || itemPutCost < 0 || itemPutCost > 100000000) return json(res, 400, { error: 'Invalid cost price.' });
+        existing.cost_price = itemPutCost;
+      }
       db.prepare('UPDATE menu_items SET name=?, description=?, price=?, category_id=?, image_url=?, is_available=?, barcode=?, stock_qty=?, cost_price=? WHERE id=?')
         .run(existing.name, existing.description, existing.price, existing.category_id, existing.image_url, existing.is_available, existing.barcode || '', existing.stock_qty, existing.cost_price, itemId);
       return json(res, 200, { ok: true, item: existing });
