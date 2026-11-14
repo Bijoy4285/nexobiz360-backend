@@ -365,6 +365,7 @@ var msCode = String(body.member_code || ('MB-' + generateId().slice(0, 10).toUpp
     if (urlPath === '/api/ecosystem/qr' && method === 'GET') {
       var qrText = ''; var qrSize = 240;
       try { var qrUrl = new URL(req.url, 'http://localhost'); qrText = qrUrl.searchParams.get('text') || ''; qrSize = parseInt(qrUrl.searchParams.get('size') || '240', 10) || 240; } catch(e) {}
+if (publicRateLimited(req, 'qr', 60, 60 * 60 * 1000)) return json(res, 429, { error: 'Too many requests. Please try again later.' });
 if (!qrText) return json(res, 400, { error: 'text is required.' });
       if (qrText.length > 1000) return json(res, 400, { error: 'text is too long.' });
       qrSize = Math.min(Math.max(qrSize, 64), 1024);
@@ -903,7 +904,7 @@ if (!skipNotif) {
 
   if (order.customer_email) {
     var orderItemsHtml = (order.items || []).map(function(it) {
-      return '<tr><td style="padding:4px 0;">' + (it.name || '') + ' × ' + (it.qty || 1) + '</td><td style="padding:4px 0;text-align:right;">' + Number(it.price || 0).toFixed(2) + '</td></tr>';
+      return '<tr><td style="padding:4px 0;">' + String(it.name || '').replace(/[&<>"']/g, function(c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[c]; }) + ' × ' + (it.qty || 1) + '</td><td style="padding:4px 0;text-align:right;">' + Number(it.price || 0).toFixed(2) + '</td></tr>';
     }).join('');
     sendConfirmationEmail(order.customer_email, 'Order Confirmed ✅ — ' + (store.name || 'Ocean SFT'), emailTemplates.orderConfirmationEmail(store.name, (order.customer_name || order.staff_name || 'Customer'), orderItemsHtml, Number(order.total || 0) + ' ' + (store.currency || ''), order.id));
   }
@@ -2053,6 +2054,9 @@ var tQuery = String(body.query || '').slice(0, 1000);
     var invQuery = new URL(req.url, 'http://localhost').searchParams;
     function qStoreId() { return body.store_id || invQuery.get('store_id') || ''; }
     var m;
+    function ensureInvIdem() {
+      db.exec('CREATE TABLE IF NOT EXISTS inventory_idempotency (id TEXT PRIMARY KEY, store_id TEXT, kind TEXT, ref_id TEXT, created_at TEXT)');
+    }
 
     // ---------- 1) STOCK ADJUSTMENTS ----------
     if (method === 'POST' && (m = urlPath.match(/^\/api\/ecosystem\/stores\/([^/]+)\/stock-adjustments$/))) {
@@ -2192,6 +2196,13 @@ body.supplier_phone != null ? String(body.supplier_phone).slice(0, 40) : poPatch
       if (requireStoreOwner(res, user, poRecvStore)) return null;
       var poRecvRow = db.prepare('SELECT * FROM purchase_orders WHERE id = ? AND store_id = ?').get(poRecvId, poRecvStoreId);
       if (!poRecvRow) return json(res, 404, { error: 'Purchase order not found.' });
+           ensureInvIdem();
+      var poRecvReqId = String(body.request_id || '').trim().slice(0, 80);
+      var poRecvKey = poRecvReqId ? 'po_recv|' + poRecvId + '|' + poRecvReqId : '';
+      if (poRecvKey) {
+        var poRecvDone = db.prepare('SELECT id FROM inventory_idempotency WHERE id = ?').get(poRecvKey);
+        if (poRecvDone) return json(res, 200, { purchase_order: db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(poRecvId), items: db.prepare('SELECT * FROM purchase_order_items WHERE po_id = ?').all(poRecvId) });
+      }
       if (poRecvRow.status === 'received' || poRecvRow.status === 'cancelled') {
         return json(res, 400, { error: 'This purchase order is already ' + poRecvRow.status + '.' });
       }
@@ -2202,29 +2213,37 @@ body.supplier_phone != null ? String(body.supplier_phone).slice(0, 40) : poPatch
         for (var i = 0; i < poRecvOverride.length; i++) { if (poRecvOverride[i].item_id === itemId) return poRecvOverride[i]; }
         return null;
       };
-      poRecvItems.forEach(function(poi) {
-        var ov = poFindOverride(poi.item_id);
+      try {
+        db.exec('BEGIN');
+        poRecvItems.forEach(function(poi) {
+          var ov = poFindOverride(poi.item_id);
 var qtyToReceive = ov ? Number(ov.qty_received) : (Number(poi.qty_ordered) - Number(poi.qty_received));
 if (!isFinite(qtyToReceive) || qtyToReceive < 0) qtyToReceive = 0;
 var poRecvRemaining = Number(poi.qty_ordered) - Number(poi.qty_received);
 if (!isFinite(poRecvRemaining) || poRecvRemaining < 0) poRecvRemaining = 0;
 if (qtyToReceive > poRecvRemaining) qtyToReceive = poRecvRemaining;
-        if (qtyToReceive > 0) {
+          if (qtyToReceive > 0) {
 var poRecvAdjustResult = adjustStock(poRecvStoreId, poi.item_id, qtyToReceive, 'purchase_receive', {
-            refType: 'purchase_order', refId: poRecvId, createdBy: actorName, allowNegative: true
-          });
+              refType: 'purchase_order', refId: poRecvId, createdBy: actorName, allowNegative: true
+            });
 if (poRecvAdjustResult && !poRecvAdjustResult.error && poi.unit_cost > 0) {
-            db.prepare('UPDATE menu_items SET cost_price = ? WHERE id = ? AND store_id = ?').run(poi.unit_cost, poi.item_id, poRecvStoreId);
-          }
+              db.prepare('UPDATE menu_items SET cost_price = ? WHERE id = ? AND store_id = ?').run(poi.unit_cost, poi.item_id, poRecvStoreId);
+            }
 if (poRecvAdjustResult && !poRecvAdjustResult.error) {
-  db.prepare('UPDATE purchase_order_items SET qty_received = qty_received + ? WHERE id = ?').run(qtyToReceive, poi.id);
-}
-        }
-      });
-      var poRecvItemsAfter = db.prepare('SELECT * FROM purchase_order_items WHERE po_id = ?').all(poRecvId);
-      var poAllReceived = true;
-      poRecvItemsAfter.forEach(function(poi) { if (Number(poi.qty_received) < Number(poi.qty_ordered)) poAllReceived = false; });
-      db.prepare('UPDATE purchase_orders SET status = ?, received_at = datetime(\'now\') WHERE id = ?').run(poAllReceived ? 'received' : 'partial', poRecvId);
+    db.prepare('UPDATE purchase_order_items SET qty_received = qty_received + ? WHERE id = ?').run(qtyToReceive, poi.id);
+  }
+          }
+        });
+        var poRecvItemsAfter = db.prepare('SELECT * FROM purchase_order_items WHERE po_id = ?').all(poRecvId);
+        var poAllReceived = true;
+        poRecvItemsAfter.forEach(function(poi) { if (Number(poi.qty_received) < Number(poi.qty_ordered)) poAllReceived = false; });
+        db.prepare('UPDATE purchase_orders SET status = ?, received_at = datetime(\'now\') WHERE id = ?').run(poAllReceived ? 'received' : 'partial', poRecvId);
+        if (poRecvKey) db.prepare('INSERT OR IGNORE INTO inventory_idempotency (id, store_id, kind, ref_id, created_at) VALUES (?, ?, ?, ?, datetime(\'now\'))').run(poRecvKey, poRecvStoreId, 'purchase_receive', poRecvId);
+        db.exec('COMMIT');
+      } catch (e) {
+        try { db.exec('ROLLBACK'); } catch(e2){}
+        throw e;
+      }
       return json(res, 200, { purchase_order: db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(poRecvId), items: poRecvItemsAfter });
     }
 
@@ -2291,7 +2310,14 @@ var toId = 'to_' + generateId();
       if (!toDispStore) return json(res, 404, { error: 'Store not found.' });
       if (requireStoreOwner(res, user, toDispStore)) return null;
       var toDispRow = db.prepare('SELECT * FROM transfer_orders WHERE id = ?').get(toDispId);
-      if (!toDispRow || toDispRow.from_store_id !== toDispStoreId) return json(res, 404, { error: 'Transfer order not found.' });
+            if (!toDispRow || toDispRow.from_store_id !== toDispStoreId) return json(res, 404, { error: 'Transfer order not found.' });
+      ensureInvIdem();
+      var toDispReqId = String(body.request_id || '').trim().slice(0, 80);
+      var toDispKey = toDispReqId ? 'to_disp|' + toDispId + '|' + toDispReqId : '';
+      if (toDispKey) {
+        var toDispDone = db.prepare('SELECT id FROM inventory_idempotency WHERE id = ?').get(toDispKey);
+        if (toDispDone) return json(res, 200, { transfer_order: db.prepare('SELECT * FROM transfer_orders WHERE id = ?').get(toDispId) });
+      }
       if (toDispRow.status !== 'pending') return json(res, 400, { error: 'Only pending transfers can be dispatched.' });
       var toDispItems = db.prepare('SELECT * FROM transfer_order_items WHERE transfer_id = ?').all(toDispId);
       for (var di = 0; di < toDispItems.length; di++) {
@@ -2303,10 +2329,19 @@ if (!srcItem || srcAvail < diQty) {
           return json(res, 400, { error: 'Insufficient stock for item: ' + toDispItems[di].item_name, available: srcAvail });
         }
       }
-      toDispItems.forEach(function(it) {
-        adjustStock(toDispStoreId, it.item_id, -Number(it.qty), 'transfer_dispatch', { refType: 'transfer_order', refId: toDispId, createdBy: actorName });
-      });
-      db.prepare('UPDATE transfer_orders SET status = ?, dispatched_at = datetime(\'now\') WHERE id = ?').run('in_transit', toDispId);
+      try {
+        db.exec('BEGIN');
+        toDispItems.forEach(function(it) {
+          var toDispAdj = adjustStock(toDispStoreId, it.item_id, -Number(it.qty), 'transfer_dispatch', { refType: 'transfer_order', refId: toDispId, createdBy: actorName });
+          if (!toDispAdj || toDispAdj.error) throw new Error('transfer_dispatch_adjust_failed');
+        });
+        db.prepare('UPDATE transfer_orders SET status = ?, dispatched_at = datetime(\'now\') WHERE id = ?').run('in_transit', toDispId);
+        if (toDispKey) db.prepare('INSERT OR IGNORE INTO inventory_idempotency (id, store_id, kind, ref_id, created_at) VALUES (?, ?, ?, ?, datetime(\'now\'))').run(toDispKey, toDispStoreId, 'transfer_dispatch', toDispId);
+        db.exec('COMMIT');
+      } catch (e) {
+        try { db.exec('ROLLBACK'); } catch(e2){}
+        throw e;
+      }
       return json(res, 200, { transfer_order: db.prepare('SELECT * FROM transfer_orders WHERE id = ?').get(toDispId) });
     }
 
@@ -2317,7 +2352,14 @@ if (!srcItem || srcAvail < diQty) {
       if (!toRecvStore) return json(res, 404, { error: 'Store not found.' });
       if (requireStoreOwner(res, user, toRecvStore)) return null;
       var toRecvRow = db.prepare('SELECT * FROM transfer_orders WHERE id = ?').get(toRecvId);
-      if (!toRecvRow || toRecvRow.to_store_id !== toRecvStoreId) return json(res, 404, { error: 'Transfer order not found.' });
+           if (!toRecvRow || toRecvRow.to_store_id !== toRecvStoreId) return json(res, 404, { error: 'Transfer order not found.' });
+      ensureInvIdem();
+      var toRecvReqId = String(body.request_id || '').trim().slice(0, 80);
+      var toRecvKey = toRecvReqId ? 'to_recv|' + toRecvId + '|' + toRecvReqId : '';
+      if (toRecvKey) {
+        var toRecvDone = db.prepare('SELECT id FROM inventory_idempotency WHERE id = ?').get(toRecvKey);
+        if (toRecvDone) return json(res, 200, { transfer_order: db.prepare('SELECT * FROM transfer_orders WHERE id = ?').get(toRecvId), warnings: [] });
+      }
       if (toRecvRow.status !== 'in_transit') return json(res, 400, { error: 'Only in-transit transfers can be received.' });
       var toRecvItems = db.prepare('SELECT * FROM transfer_order_items WHERE transfer_id = ?').all(toRecvId);
      var toMissing = [];
@@ -2328,16 +2370,25 @@ toRecvItems.forEach(function(it) {
 if (toMissing.length) {
   return json(res, 400, { error: 'Destination store has no item named: ' + toMissing.join(', ') + '. Add the item first, then receive the transfer.' });
 }
-var toRecvNotes = [];
-      toRecvItems.forEach(function(it) {
-        var destItem = db.prepare('SELECT * FROM menu_items WHERE store_id = ? AND lower(name) = lower(?)').get(toRecvStoreId, it.item_name);
-        if (destItem) {
-          adjustStock(toRecvStoreId, destItem.id, Number(it.qty), 'transfer_receive', { refType: 'transfer_order', refId: toRecvId, createdBy: actorName, allowNegative: true });
-        } else {
-          toRecvNotes.push('No matching item named "' + it.item_name + '" in destination store — add it manually and adjust stock.');
-        }
-      });
-      db.prepare('UPDATE transfer_orders SET status = ?, received_at = datetime(\'now\') WHERE id = ?').run('received', toRecvId);
+      var toRecvNotes = [];
+      try {
+        db.exec('BEGIN');
+        toRecvItems.forEach(function(it) {
+          var destItem = db.prepare('SELECT * FROM menu_items WHERE store_id = ? AND lower(name) = lower(?)').get(toRecvStoreId, it.item_name);
+          if (destItem) {
+            var toRecvAdj = adjustStock(toRecvStoreId, destItem.id, Number(it.qty), 'transfer_receive', { refType: 'transfer_order', refId: toRecvId, createdBy: actorName, allowNegative: true });
+            if (!toRecvAdj || toRecvAdj.error) throw new Error('transfer_receive_adjust_failed');
+          } else {
+            toRecvNotes.push('No matching item named "' + it.item_name + '" in destination store — add it manually and adjust stock.');
+          }
+        });
+        db.prepare('UPDATE transfer_orders SET status = ?, received_at = datetime(\'now\') WHERE id = ?').run('received', toRecvId);
+        if (toRecvKey) db.prepare('INSERT OR IGNORE INTO inventory_idempotency (id, store_id, kind, ref_id, created_at) VALUES (?, ?, ?, ?, datetime(\'now\'))').run(toRecvKey, toRecvStoreId, 'transfer_receive', toRecvId);
+        db.exec('COMMIT');
+      } catch (e) {
+        try { db.exec('ROLLBACK'); } catch(e2){}
+        throw e;
+      }
       return json(res, 200, { transfer_order: db.prepare('SELECT * FROM transfer_orders WHERE id = ?').get(toRecvId), warnings: toRecvNotes });
     }
 
@@ -2429,18 +2480,34 @@ if (!isFinite(counted) || counted < 0) counted = 0;
       var icFinStore = switchToStoreOwner(icFinStoreId);
       if (!icFinStore) return json(res, 404, { error: 'Store not found.' });
       if (requireStoreOwner(res, user, icFinStore)) return null;
-      var icFinRow = db.prepare('SELECT * FROM inventory_counts WHERE id = ? AND store_id = ?').get(icFinId, icFinStoreId);
+            var icFinRow = db.prepare('SELECT * FROM inventory_counts WHERE id = ? AND store_id = ?').get(icFinId, icFinStoreId);
       if (!icFinRow) return json(res, 404, { error: 'Inventory count not found.' });
+      ensureInvIdem();
+      var icFinReqId = String(body.request_id || '').trim().slice(0, 80);
+      var icFinKey = icFinReqId ? 'ic_fin|' + icFinId + '|' + icFinReqId : '';
+      if (icFinKey) {
+        var icFinDone = db.prepare('SELECT id FROM inventory_idempotency WHERE id = ?').get(icFinKey);
+        if (icFinDone) return json(res, 200, { inventory_count: db.prepare('SELECT * FROM inventory_counts WHERE id = ?').get(icFinId) });
+      }
       if (icFinRow.status !== 'submitted') return json(res, 400, { error: 'Only submitted counts can be finalized.' });
-      var icFinItems = db.prepare('SELECT * FROM inventory_count_items WHERE count_id = ?').all(icFinId);
-      icFinItems.forEach(function(it) {
-        if (Number(it.variance) !== 0) {
-          adjustStock(icFinStoreId, it.item_id, Number(it.variance), 'count_adjustment', {
-            refType: 'inventory_count', refId: icFinId, createdBy: actorName, reason: 'Physical count adjustment', allowNegative: true
-          });
-        }
-      });
-      db.prepare('UPDATE inventory_counts SET status = ?, finalized_at = datetime(\'now\') WHERE id = ?').run('finalized', icFinId);
+      try {
+        db.exec('BEGIN');
+        var icFinItems = db.prepare('SELECT * FROM inventory_count_items WHERE count_id = ?').all(icFinId);
+        icFinItems.forEach(function(it) {
+          if (Number(it.variance) !== 0) {
+            var icFinAdj = adjustStock(icFinStoreId, it.item_id, Number(it.variance), 'count_adjustment', {
+              refType: 'inventory_count', refId: icFinId, createdBy: actorName, reason: 'Physical count adjustment', allowNegative: true
+            });
+            if (!icFinAdj || icFinAdj.error) throw new Error('count_adjustment_failed');
+          }
+        });
+        db.prepare('UPDATE inventory_counts SET status = ?, finalized_at = datetime(\'now\') WHERE id = ?').run('finalized', icFinId);
+        if (icFinKey) db.prepare('INSERT OR IGNORE INTO inventory_idempotency (id, store_id, kind, ref_id, created_at) VALUES (?, ?, ?, ?, datetime(\'now\'))').run(icFinKey, icFinStoreId, 'inventory_count_finalize', icFinId);
+        db.exec('COMMIT');
+      } catch (e) {
+        try { db.exec('ROLLBACK'); } catch(e2){}
+        throw e;
+      }
       return json(res, 200, { inventory_count: db.prepare('SELECT * FROM inventory_counts WHERE id = ?').get(icFinId) });
     }
 
@@ -2510,6 +2577,13 @@ if (!body.output_item_id || !prIngredients.length) return json(res, 400, { error
       var proStore = switchToStoreOwner(proStoreId);
       if (!proStore) return json(res, 404, { error: 'Store not found.' });
       if (requireStoreOwner(res, user, proStore)) return null;
+      ensureInvIdem();
+      var proReqId = String(body.request_id || '').trim().slice(0, 80);
+      var proKey = proReqId ? 'pro|' + proStoreId + '|' + proReqId : '';
+      if (proKey) {
+        var proDone = db.prepare('SELECT ref_id FROM inventory_idempotency WHERE id = ?').get(proKey);
+        if (proDone && proDone.ref_id) return json(res, 200, { production_order: db.prepare('SELECT * FROM production_orders WHERE id = ? AND store_id = ?').get(proDone.ref_id, proStoreId) });
+      }
 var proQty = Number(body.qty_produced);
 if (!isFinite(proQty)) proQty = 0;
 if (!isFinite(proQty) || proQty <= 0 || proQty > 1000000) return json(res, 400, { error: 'qty_produced must be greater than 0 and at most 1000000.' });
@@ -2555,17 +2629,27 @@ for (var pi = 0; pi < proIngredients.length; pi++) {
       }
       var proId = 'pro_' + generateId();
       var proTotalCost = 0;
-      proIngredients.forEach(function(ing) {
-        var ingRow2 = db.prepare('SELECT * FROM menu_items WHERE id = ? AND store_id = ?').get(ing.item_id, proStoreId);
-        proTotalCost += (ingRow2 ? Number(ingRow2.cost_price) || 0 : 0) * Number(ing.qty);
-        adjustStock(proStoreId, ing.item_id, -Number(ing.qty), 'production_consume', { refType: 'production_order', refId: proId, createdBy: actorName });
-      });
-      adjustStock(proStoreId, proOutputId, proQty, 'production_output', { refType: 'production_order', refId: proId, createdBy: actorName, allowNegative: true });
-      if (proTotalCost > 0) {
-        db.prepare('UPDATE menu_items SET cost_price = ? WHERE id = ? AND store_id = ?').run(Number((proTotalCost / proQty).toFixed(4)), proOutputId, proStoreId);
+      try {
+        db.exec('BEGIN');
+        proIngredients.forEach(function(ing) {
+          var ingRow2 = db.prepare('SELECT * FROM menu_items WHERE id = ? AND store_id = ?').get(ing.item_id, proStoreId);
+          proTotalCost += (ingRow2 ? Number(ingRow2.cost_price) || 0 : 0) * Number(ing.qty);
+          var proConsumeAdj = adjustStock(proStoreId, ing.item_id, -Number(ing.qty), 'production_consume', { refType: 'production_order', refId: proId, createdBy: actorName });
+          if (!proConsumeAdj || proConsumeAdj.error) throw new Error('production_consume_adjust_failed');
+        });
+        var proOutputAdj = adjustStock(proStoreId, proOutputId, proQty, 'production_output', { refType: 'production_order', refId: proId, createdBy: actorName, allowNegative: true });
+        if (!proOutputAdj || proOutputAdj.error) throw new Error('production_output_adjust_failed');
+        if (proTotalCost > 0) {
+          db.prepare('UPDATE menu_items SET cost_price = ? WHERE id = ? AND store_id = ?').run(Number((proTotalCost / proQty).toFixed(4)), proOutputId, proStoreId);
+        }
+        db.prepare('INSERT INTO production_orders (id, store_id, recipe_id, output_item_id, output_item_name, qty_produced, ingredients_json, total_cost, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))')
+          .run(proId, proStoreId, proRecipeId, proOutputId, proOutputName, proQty, JSON.stringify(proIngredients), proTotalCost, actorName);
+        if (proKey) db.prepare('INSERT OR IGNORE INTO inventory_idempotency (id, store_id, kind, ref_id, created_at) VALUES (?, ?, ?, ?, datetime(\'now\'))').run(proKey, proStoreId, 'production_order', proId);
+        db.exec('COMMIT');
+      } catch (e) {
+        try { db.exec('ROLLBACK'); } catch(e2){}
+        throw e;
       }
-      db.prepare('INSERT INTO production_orders (id, store_id, recipe_id, output_item_id, output_item_name, qty_produced, ingredients_json, total_cost, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))')
-        .run(proId, proStoreId, proRecipeId, proOutputId, proOutputName, proQty, JSON.stringify(proIngredients), proTotalCost, actorName);
       return json(res, 200, { production_order: db.prepare('SELECT * FROM production_orders WHERE id = ?').get(proId) });
     }
 
