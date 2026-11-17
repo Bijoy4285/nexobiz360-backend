@@ -654,6 +654,7 @@ body.tagline = String(body.tagline || '').slice(0, 300);
       var existing = db.prepare('SELECT * FROM reg.stores WHERE id = ?').get(storeId);
       if (!existing) return json(res, 404, { error: 'Store not found.' });
       if (requireStoreOwner(res, user, existing)) return;
+     if (body.type !== undefined && existing.type && String(body.type).toLowerCase() !== String(existing.type).toLowerCase()) return json(res, 400, { error: 'Store type cannot be changed.' });
       var fields = ['name','type','description','address','phone','email','lat','lng','logo_url','cover_url','is_active','template_key','accent_color','tagline','opening_hours','booking_enabled','ordering_enabled','ai_enabled','whatsapp_number'];
       fields.forEach(function(f) {
         if (body[f] !== undefined) existing[f] = body[f];
