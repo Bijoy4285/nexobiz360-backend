@@ -609,7 +609,8 @@ cat.items.forEach(function(it) { delete it.cost_price; });
         delete store.owner_id;
         delete store.trial_until;
         delete store.entry_qr_token;
-        delete store.checkout_qr_token;
+      delete store.checkout_qr_token;
+        delete store.settings_json;
       }
 
       try { store.gym_plans = db.prepare('SELECT * FROM gym_plans WHERE store_id = ? ORDER BY price ASC').all(storeId); } catch(e){ store.gym_plans = []; }
