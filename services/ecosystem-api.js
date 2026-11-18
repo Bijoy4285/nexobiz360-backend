@@ -195,14 +195,16 @@ function handleEcosystem(req, res, user) {
   }
     function findGymStore(storeId) {
     if (!db) return null;
-    if (storeId) return getStore(storeId);
+if (!storeId) return null;
+var gs = getStore(storeId);
+if (!gs) return null;
+if (gs.type && gs.type !== 'gym') return null;
+return gs;
     try { return db.prepare('SELECT * FROM reg.stores WHERE type = ? AND is_active = 1 ORDER BY created_at LIMIT 1').get('gym') || null; } catch(e){ return null; }
   }
 
   // ---- Advanced Inventory helper (stock +/- with history log) --------
 function adjustStock(storeId, itemId, qtyChange, changeType, opts) {
-    qtyChange = Number(qtyChange);
-    if (!isFinite(qtyChange)) return { error: 'invalid_quantity' };
     qtyChange = Number(qtyChange);
     if (!isFinite(qtyChange)) return { error: 'invalid_quantity' };
     opts = opts || {};
@@ -331,21 +333,22 @@ return parseBody(req, user ? 8 * 1024 * 1024 : 256 * 1024).catch(function() { re
       var msStore = getStore(msId);
       if (!msStore) return json(res, 404, { error: 'Store not found.' });
       if (requireStoreOwner(res, user, msStore)) return;
-      var msModule = String(body.module || 'generic');
-      var msPlan = String(body.plan || '');
-      var msPlanLabel = String(body.plan_label || msPlan || 'Member');
-      var msPrice = Number(body.price || 0) || 0;
-      var msStatus = String(body.status || 'Active');
-      var msStart = String(body.start || '');
-      var msExpiry = String(body.expiry || '');
-      var msCode = String(body.member_code || ('MB-' + generateId().slice(0, 10).toUpperCase()));
+switchToStoreOwner(msId);
+var msModule = String(body.module || 'generic').slice(0, 30);
+var msPlan = String(body.plan || '').slice(0, 120);
+var msPlanLabel = String(body.plan_label || msPlan || 'Member').slice(0, 120);
+var msPrice = Math.min(100000000, Math.max(0, Number(body.price) || 0));
+var msStatus = String(body.status || 'Active').slice(0, 30);
+var msStart = String(body.start || '').slice(0, 20);
+var msExpiry = String(body.expiry || '').slice(0, 20);
+var msCode = String(body.member_code || ('MB-' + generateId().slice(0, 10).toUpperCase())).slice(0, 40);
       var msId2 = 'mem_' + generateId();
       db.prepare("INSERT INTO memberships (id, store_id, user_id, member_email, name, phone, module, plan, plan_label, price, status, start, expiry, member_code, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))")
-        .run(msId2, msId, '', msEmail, String(body.name || ''), String(body.phone || ''), msModule, msPlan, msPlanLabel, msPrice, msStatus, msStart, msExpiry, msCode);
+.run(msId2, msId, '', msEmail.slice(0, 200), String(body.name || '').slice(0, 200), String(body.phone || '').slice(0, 40), msModule, msPlan, msPlanLabel, msPrice, msStatus, msStart, msExpiry, msCode);
       if (msModule === 'gym') {
         try {
           db.prepare("INSERT INTO gym_members (id, store_id, email, name, phone, plan, price, expiry, status, joined, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now')) ON CONFLICT(store_id, email) DO UPDATE SET name=excluded.name, phone=excluded.phone, plan=excluded.plan, price=excluded.price, expiry=excluded.expiry, status=excluded.status, updated_at=datetime('now')")
-            .run('gm_' + generateId(), msId, msEmail, String(body.name || ''), String(body.phone || ''), msPlan, msPrice, msExpiry, msStatus, msStart);
+.run('gm_' + generateId(), msId, msEmail.slice(0, 200), String(body.name || '').slice(0, 200), String(body.phone || '').slice(0, 40), msPlan, msPrice, msExpiry, msStatus, msStart);
         } catch(e) {}
       }
       // Send the new member a branded welcome email (non-blocking)
@@ -362,6 +365,7 @@ return parseBody(req, user ? 8 * 1024 * 1024 : 256 * 1024).catch(function() { re
     if (urlPath === '/api/ecosystem/qr' && method === 'GET') {
       var qrText = ''; var qrSize = 240;
       try { var qrUrl = new URL(req.url, 'http://localhost'); qrText = qrUrl.searchParams.get('text') || ''; qrSize = parseInt(qrUrl.searchParams.get('size') || '240', 10) || 240; } catch(e) {}
+if (publicRateLimited(req, 'qr', 60, 60 * 60 * 1000)) return json(res, 429, { error: 'Too many requests. Please try again later.' });
 if (!qrText) return json(res, 400, { error: 'text is required.' });
       if (qrText.length > 1000) return json(res, 400, { error: 'text is too long.' });
       qrSize = Math.min(Math.max(qrSize, 64), 1024);
@@ -407,7 +411,11 @@ if (!qrText) return json(res, 400, { error: 'text is required.' });
     }
  function findGymStore(storeId) {
     if (!db) return null;
-    if (storeId) return getStore(storeId);
+if (!storeId) return null;
+var gs = getStore(storeId);
+if (!gs) return null;
+if (gs.type && gs.type !== 'gym') return null;
+return gs;
     try { return db.prepare('SELECT * FROM reg.stores WHERE type = ? AND is_active = 1 ORDER BY created_at LIMIT 1').get('gym') || null; } catch(e){ return null; }
   }
 
@@ -509,23 +517,29 @@ if (urlPath === '/api/ecosystem/stores' && method === 'GET') {
   
   // ✅ FIX: Filter by owner unless admin
 
+var pubCols = 'id, slug, name, type, description, address, phone, lat, lng, logo_url, cover_url, template_key, accent_color, tagline, opening_hours, is_active';
 var myOwnerId = user ? user.id : null;
 var isAdmin = user && user.isAdmin;
 
-if (type) {
-  if (isAdmin || !myOwnerId) {
+if (!user) {
+  if (type) {
+    stores = db.prepare('SELECT ' + pubCols + ' FROM reg.stores WHERE is_active = 1 AND type = ? ORDER BY name').all(type);
+  } else {
+    stores = db.prepare('SELECT ' + pubCols + ' FROM reg.stores WHERE is_active = 1 ORDER BY name').all();
+  }
+} else if (isAdmin) {
+  if (type) {
     stores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 AND type = ? ORDER BY name').all(type);
   } else {
-    stores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 AND type = ? AND owner_id = ? ORDER BY name').all(type, myOwnerId);
+    stores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 ORDER BY name').all();
   }
 } else {
-  if (isAdmin || !myOwnerId) {
-    stores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 ORDER BY name').all();
+  if (type) {
+    stores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 AND type = ? AND owner_id = ? ORDER BY name').all(type, myOwnerId);
   } else {
     stores = db.prepare('SELECT * FROM reg.stores WHERE is_active = 1 AND owner_id = ? ORDER BY name').all(myOwnerId);
   }
 }
-  
   stores.forEach(function(s) {
     var stats = reviewStatsFor(s.id);
     s.review_count = stats.review_count;
@@ -587,6 +601,17 @@ if (type) {
         try { cat.items = db.prepare('SELECT * FROM menu_items WHERE category_id = ? AND is_available = 1 ORDER BY sort_order').all(cat.id); } catch(e){ cat.items = []; }
       });
 store.menu_categories = categories;
+      if (!canManageStore(user, store)) {
+        categories.forEach(function(cat) {
+cat.items = (cat.items || []).filter(function(it) { return it.is_visible_to_customers === undefined || it.is_visible_to_customers === null || Number(it.is_visible_to_customers) !== 0; });
+cat.items.forEach(function(it) { delete it.cost_price; });
+        });
+        delete store.owner_id;
+        delete store.trial_until;
+        delete store.entry_qr_token;
+      delete store.checkout_qr_token;
+        delete store.settings_json;
+      }
 
       try { store.gym_plans = db.prepare('SELECT * FROM gym_plans WHERE store_id = ? ORDER BY price ASC').all(storeId); } catch(e){ store.gym_plans = []; }
       var normalizedStore = normalizeStore(store);
@@ -597,6 +622,11 @@ store.menu_categories = categories;
     if (urlPath === '/api/ecosystem/stores' && method === 'POST') {
       if (requireLogin(res, user)) return;
       if (!body.name || !body.type) return json(res, 400, { error: 'Store name and type are required.' });
+if (!/^[A-Za-z0-9_-]{1,30}$/.test(String(body.type))) return json(res, 400, { error: 'Invalid store type.' });
+body.name = String(body.name).slice(0, 200);
+body.description = String(body.description || '').slice(0, 2000);
+body.address = String(body.address || '').slice(0, 500);
+body.tagline = String(body.tagline || '').slice(0, 300);
       var id = 'store_' + generateId();
       var baseSlug = slugify(body.slug || body.name || id) || id;
       var slug = baseSlug;
@@ -605,7 +635,7 @@ store.menu_categories = categories;
         slug = baseSlug + '-' + n++;
       }
       db.prepare('INSERT INTO reg.stores (id, owner_id, name, type, description, address, phone, email, lat, lng, logo_url, cover_url, is_active, slug, template_key, accent_color, tagline, opening_hours, booking_enabled, ordering_enabled, ai_enabled, whatsapp_number, services_json, gallery_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(id, ownerId(user), body.name, body.type, body.description || '', body.address || '', body.phone || '', body.email || '', body.lat || 0, body.lng || 0, body.logo_url || '', body.cover_url || '', (body.is_active === false || body.active === false) ? 0 : 1, slug, body.template_key || 'clean', body.accent_color || '#0891b2', body.tagline || '', body.opening_hours || '', body.booking_enabled === false ? 0 : 1, body.ordering_enabled === false ? 0 : 1, body.ai_enabled === false ? 0 : 1, body.whatsapp_number || body.phone || '', JSON.stringify(body.services || []), JSON.stringify(body.gallery || []));
+        .run(id, ownerId(user), body.name, body.type, body.description || '', body.address || '',String(body.phone || '').slice(0, 40), String(body.email || '').slice(0, 200), (isFinite(Number(body.lat)) && Math.abs(Number(body.lat)) <= 90 ? Number(body.lat) : 0), (isFinite(Number(body.lng)) && Math.abs(Number(body.lng)) <= 180 ? Number(body.lng) : 0), body.logo_url || '', body.cover_url || '', (body.is_active === false || body.active === false) ? 0 : 1, slug, String(body.template_key || 'clean').slice(0, 40), String(body.accent_color || '#0891b2').slice(0, 20), body.tagline || '', String(body.opening_hours || '').slice(0, 1000), body.booking_enabled === false ? 0 : 1, body.ordering_enabled === false ? 0 : 1, body.ai_enabled === false ? 0 : 1, body.whatsapp_number || body.phone || '', JSON.stringify(body.services || []), JSON.stringify(body.gallery || []));
       try { provisionUserDb(ownerId(user), [body.type]); } catch(e) {}
       try {
         var coreOwner = ownerId(user);
@@ -624,11 +654,29 @@ store.menu_categories = categories;
       var existing = db.prepare('SELECT * FROM reg.stores WHERE id = ?').get(storeId);
       if (!existing) return json(res, 404, { error: 'Store not found.' });
       if (requireStoreOwner(res, user, existing)) return;
+     if (body.type !== undefined && existing.type && String(body.type).toLowerCase() !== String(existing.type).toLowerCase()) return json(res, 400, { error: 'Store type cannot be changed.' });
       var fields = ['name','type','description','address','phone','email','lat','lng','logo_url','cover_url','is_active','template_key','accent_color','tagline','opening_hours','booking_enabled','ordering_enabled','ai_enabled','whatsapp_number'];
       fields.forEach(function(f) {
         if (body[f] !== undefined) existing[f] = body[f];
       });
-      if (body.slug !== undefined) existing.slug = slugify(body.slug || existing.name);
+if (body.type !== undefined && !/^[A-Za-z0-9_-]{1,30}$/.test(String(body.type))) return json(res, 400, { error: 'Invalid store type.' });
+      existing.name = String(existing.name || '').trim().slice(0, 200) || 'Store';
+      existing.description = String(existing.description || '').slice(0, 2000);
+      existing.address = String(existing.address || '').slice(0, 500);
+      existing.tagline = String(existing.tagline || '').slice(0, 300);
+      existing.phone = String(existing.phone || '').slice(0, 40);
+      existing.email = String(existing.email || '').slice(0, 200);
+      if (body.lat !== undefined) { var putLat = Number(body.lat); existing.lat = isFinite(putLat) && Math.abs(putLat) <= 90 ? putLat : 0; }
+      if (body.lng !== undefined) { var putLng = Number(body.lng); existing.lng = isFinite(putLng) && Math.abs(putLng) <= 180 ? putLng : 0; }
+      if (body.slug !== undefined) {
+  var putSlugBase = slugify(body.slug || existing.name) || existing.slug || storeId;
+  var putSlug = putSlugBase;
+  var putSlugN = 2;
+  while (db.prepare('SELECT id FROM reg.stores WHERE slug = ? AND id <> ?').get(putSlug, storeId)) {
+    putSlug = putSlugBase + '-' + putSlugN++;
+  }
+  existing.slug = putSlug;
+}
       existing.services_json = JSON.stringify(Array.isArray(body.services) ? body.services : safeJson(existing.services_json, []));
       existing.gallery_json = JSON.stringify(Array.isArray(body.gallery) ? body.gallery : safeJson(existing.gallery_json, []));
       if (body.settings_json !== undefined) {
@@ -658,10 +706,11 @@ store.menu_categories = categories;
       var store = db.prepare('SELECT * FROM reg.stores WHERE id = ?').get(storeId);
       if (!store) return json(res, 404, { error: 'Store not found.' });
       if (requireStoreOwner(res, user, store)) return;
-      if (!body.name) return json(res, 400, { error: 'Category name is required.' });
+var catPostName = String(body.name || '').trim().slice(0, 100);
+      if (!catPostName) return json(res, 400, { error: 'Category name is required.' });
       var catId = 'cat_' + generateId();
       var maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order), 0) + 1 as next FROM menu_categories WHERE store_id = ?').get(storeId).next;
-      db.prepare('INSERT INTO menu_categories (id, store_id, name, sort_order) VALUES (?, ?, ?, ?)').run(catId, storeId, body.name, body.sort_order || maxOrder);
+      db.prepare('INSERT INTO menu_categories (id, store_id, name, sort_order) VALUES (?, ?, ?, ?)').run(catId, storeId, catPostName, (isFinite(Number(body.sort_order)) && Number(body.sort_order)) || maxOrder);
       return json(res, 201, { ok: true, category: db.prepare('SELECT * FROM menu_categories WHERE id = ?').get(catId) });
     }
 
@@ -680,7 +729,21 @@ store.menu_categories = categories;
       if (!store) return json(res, 404, { error: 'Store not found.' });
       if (requireStoreOwner(res, user, store)) return;
       if (!body.name || body.price === undefined) return json(res, 400, { error: 'Item name and price are required.' });
-      var categoryId = body.category_id || null;
+var menuPostPrice = Number(body.price);
+if (!isFinite(menuPostPrice) || menuPostPrice < 0) return json(res, 400, { error: 'Invalid price.' });
+if (menuPostPrice > 100000000) menuPostPrice = 100000000;
+var menuPostStock = body.stock_qty === undefined ? -1 : Number(body.stock_qty);
+if (!isFinite(menuPostStock) || menuPostStock < -1) return json(res, 400, { error: 'Invalid stock quantity.' });
+if (menuPostStock > 100000000) menuPostStock = 100000000;
+var menuPostCost = body.cost_price === undefined ? 0 : Number(body.cost_price);
+if (!isFinite(menuPostCost) || menuPostCost < 0) return json(res, 400, { error: 'Invalid cost price.' });
+if (menuPostCost > 100000000) menuPostCost = 100000000;
+var categoryId = body.category_id || null;
+      if (categoryId) {
+        var menuPostCat = db.prepare('SELECT id FROM menu_categories WHERE id = ? AND store_id = ?').get(String(categoryId), storeId);
+        if (!menuPostCat) return json(res, 400, { error: 'Invalid category.' });
+        categoryId = menuPostCat.id;
+      }
       if (!categoryId && body.category_name) {
         var catRow = db.prepare('SELECT id FROM menu_categories WHERE store_id = ? AND lower(name) = lower(?)').get(storeId, body.category_name);
         if (catRow) {
@@ -688,13 +751,13 @@ store.menu_categories = categories;
         } else {
           categoryId = 'cat_' + generateId();
           var catMaxOrder = db.prepare('SELECT COALESCE(MAX(sort_order), 0) + 1 as next FROM menu_categories WHERE store_id = ?').get(storeId).next;
-          db.prepare('INSERT INTO menu_categories (id, store_id, name, sort_order) VALUES (?, ?, ?, ?)').run(categoryId, storeId, body.category_name, catMaxOrder);
+          db.prepare('INSERT INTO menu_categories (id, store_id, name, sort_order) VALUES (?, ?, ?, ?)').run(categoryId, storeId, String(body.category_name).slice(0, 100), catMaxOrder);
         }
       }
       var itemId = 'item_' + generateId();
       var maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order), 0) + 1 as next FROM menu_items WHERE store_id = ?').get(storeId).next;
       db.prepare('INSERT INTO menu_items (id, store_id, category_id, name, description, price, image_url, is_available, barcode, stock_qty, cost_price, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(itemId, storeId, categoryId, body.name, body.description || '', body.price, body.image_url || '', body.is_available !== undefined ? (body.is_available ? 1 : 0) : 1, body.barcode || '', body.stock_qty !== undefined ? Number(body.stock_qty) : -1, body.cost_price !== undefined ? Number(body.cost_price) : 0, body.sort_order || maxOrder);
+.run(itemId, storeId, categoryId, String(body.name).slice(0, 200), String(body.description || '').slice(0, 2000), menuPostPrice, body.image_url || '', body.is_available !== undefined ? (body.is_available ? 1 : 0): 1, String(body.barcode || '').slice(0, 100), menuPostStock, menuPostCost, (isFinite(Number(body.sort_order)) && Number(body.sort_order)) || maxOrder);
       return json(res, 201, { ok: true, item: db.prepare('SELECT * FROM menu_items WHERE id = ?').get(itemId) });
     }
 
@@ -703,10 +766,24 @@ store.menu_categories = categories;
       var existing = db.prepare('SELECT i.*, s.owner_id FROM menu_items i LEFT JOIN reg.stores s ON s.id = i.store_id WHERE i.id = ?').get(itemId);
       if (!existing) return json(res, 404, { error: 'Item not found.' });
       if (requireStoreOwner(res, user, existing)) return;
-      if (body.name !== undefined) existing.name = body.name;
-      if (body.description !== undefined) existing.description = body.description;
-      if (body.price !== undefined) existing.price = body.price;
-      if (body.category_id !== undefined) existing.category_id = body.category_id;
+      if (body.name !== undefined) {
+        var itemPutName = String(body.name).trim().slice(0, 200);
+        if (!itemPutName) return json(res, 400, { error: 'Item name is required.' });
+        existing.name = itemPutName;
+      }
+      if (body.description !== undefined) existing.description = String(body.description || '').slice(0, 2000);
+if (body.price !== undefined) {
+        var itemPutPrice = Number(body.price);
+        if (!isFinite(itemPutPrice) || itemPutPrice < 0 || itemPutPrice > 100000000) return json(res, 400, { error: 'Invalid price.' });
+        existing.price = itemPutPrice;
+      }
+if (body.category_id !== undefined) {
+        if (body.category_id) {
+          var itemPutCat = db.prepare('SELECT id FROM menu_categories WHERE id = ? AND store_id = ?').get(String(body.category_id), existing.store_id);
+          if (!itemPutCat) return json(res, 400, { error: 'Invalid category.' });
+        }
+        existing.category_id = body.category_id;
+      }
       if (body.category_name !== undefined && body.category_id === undefined) {
         var catRow2 = db.prepare('SELECT id FROM menu_categories WHERE store_id = ? AND lower(name) = lower(?)').get(existing.store_id, body.category_name);
         if (catRow2) {
@@ -714,15 +791,23 @@ store.menu_categories = categories;
         } else {
           var newCatId = 'cat_' + generateId();
           var catMaxOrder2 = db.prepare('SELECT COALESCE(MAX(sort_order), 0) + 1 as next FROM menu_categories WHERE store_id = ?').get(existing.store_id).next;
-          db.prepare('INSERT INTO menu_categories (id, store_id, name, sort_order) VALUES (?, ?, ?, ?)').run(newCatId, existing.store_id, body.category_name, catMaxOrder2);
+db.prepare('INSERT INTO menu_categories (id, store_id, name, sort_order) VALUES (?, ?, ?, ?)').run(newCatId, existing.store_id, String(body.category_name).slice(0, 100), catMaxOrder2);
           existing.category_id = newCatId;
         }
       }
       if (body.image_url !== undefined) existing.image_url = body.image_url;
       if (body.is_available !== undefined) existing.is_available = body.is_available ? 1 : 0;
-      if (body.barcode !== undefined) existing.barcode = body.barcode;
-      if (body.stock_qty !== undefined) existing.stock_qty = Number(body.stock_qty);
-      if (body.cost_price !== undefined) existing.cost_price = Number(body.cost_price);
+if (body.barcode !== undefined) existing.barcode = String(body.barcode || '').slice(0, 100);
+if (body.stock_qty !== undefined) {
+        var itemPutStock = Number(body.stock_qty);
+        if (!isFinite(itemPutStock) || itemPutStock < -1 || itemPutStock > 100000000) return json(res, 400, { error: 'Invalid stock quantity.' });
+        existing.stock_qty = itemPutStock;
+      }
+     if (body.cost_price !== undefined) {
+        var itemPutCost = Number(body.cost_price);
+        if (!isFinite(itemPutCost) || itemPutCost < 0 || itemPutCost > 100000000) return json(res, 400, { error: 'Invalid cost price.' });
+        existing.cost_price = itemPutCost;
+      }
       db.prepare('UPDATE menu_items SET name=?, description=?, price=?, category_id=?, image_url=?, is_available=?, barcode=?, stock_qty=?, cost_price=? WHERE id=?')
         .run(existing.name, existing.description, existing.price, existing.category_id, existing.image_url, existing.is_available, existing.barcode || '', existing.stock_qty, existing.cost_price, itemId);
       return json(res, 200, { ok: true, item: existing });
@@ -755,39 +840,73 @@ store.menu_categories = categories;
   if (!body.items || !body.items.length) return json(res, 400, { error: 'Order must have at least one item.' });
 var orderId = 'ord_' + generateId();
 
+  var isOrderOwner = canManageStore(user, store);
+  if (body.items.length > 50) return json(res, 400, { error: 'Too many items.' });
+var menuPriceMap = Object.create(null);
+  try { db.prepare('SELECT id, price FROM menu_items WHERE store_id = ?').all(storeId).forEach(function(r) { menuPriceMap[String(r.id)] = Number(r.price) || 0; }); } catch(e) {}
   var subtotal = 0;
-  body.items.forEach(function(item) { subtotal += Number(item.price || 0) * Number(item.qty || 1); });
+  for (var oi = 0; oi < body.items.length; oi++) {
+    var oItem = body.items[oi] || {};
+    var oQty = Math.floor(Number(oItem.qty || 1));
+    if (!isFinite(oQty) || oQty < 1 || oQty > 99) return json(res, 400, { error: 'Invalid quantity.' });
+    oItem.qty = oQty;
+    var dbPrice = menuPriceMap[String(oItem.menu_item_id || '')];
+    if (dbPrice === undefined) return json(res, 400, { error: 'One or more items are not available.' });
+    subtotal += dbPrice * oQty;
+    oItem.price = dbPrice;
+    if (oItem.name !== undefined) oItem.name = String(oItem.name).slice(0, 120);
+    if (oItem.note !== undefined) oItem.note = String(oItem.note).slice(0, 300);
+  }
   var taxRate = Number(body.tax_rate || 0);
+  if (!isFinite(taxRate) || taxRate < 0 || taxRate > 100) taxRate = 0;
   var discount = Number(body.discount || 0);
   var serviceAmount = Number(body.service_amount || 0);
   var tax = body.tax_amount !== undefined ? Number(body.tax_amount) : (subtotal * taxRate / 100);
+  if (!isFinite(discount) || discount < 0) discount = 0;
+  if (!isFinite(serviceAmount) || serviceAmount < 0) serviceAmount = 0;
+  if (!isFinite(tax) || tax < 0) tax = 0;
+  if (!isOrderOwner) { discount = 0; tax = 0; serviceAmount = 0; taxRate = 0; }
+  if (discount > subtotal) discount = subtotal;
   var combinedTax = tax + serviceAmount;
   var total = body.total !== undefined ? Number(body.total) : (subtotal - discount + combinedTax);
+  if (!isFinite(total) || total < 0) total = (subtotal - discount + combinedTax);
+  if (!isOrderOwner) { total = subtotal; }
+  var orderStatusVal = 'pending';
+  var paymentStatusVal = 'unpaid';
+  if (isOrderOwner) {
+    var st = String(body.status || 'pending');
+    if (st === 'pending' || st === 'preparing' || st === 'ready' || st === 'served' || st === 'completed' || st === 'cancelled') orderStatusVal = st;
+    var ps = String(body.payment_status || 'unpaid');
+    if (ps === 'unpaid' || ps === 'paid' || ps === 'partial') paymentStatusVal = ps;
+  }
+  var orderTypeVal = String(body.order_type || 'dine_in').slice(0, 20);
+  var paymentMethodVal = String(body.payment_method || 'cash').slice(0, 20);
+  var skipNotif = isOrderOwner ? Boolean(body.skip_notifications) : false;
   var noteFinal = String(body.note || '');
-  if (body.tip) noteFinal = '[tip:' + Number(body.tip).toFixed(2) + '] ' + noteFinal;
+if (body.tip && isFinite(Number(body.tip)) && Number(body.tip) > 0 && Number(body.tip) <= 100000000) noteFinal = '[tip:' + Number(body.tip).toFixed(2) + '] ' + noteFinal;
   if (serviceAmount > 0) noteFinal = '[service:' + serviceAmount.toFixed(2) + '] ' + noteFinal;
   var staffNameVal = String(body.staff_name || '');
   var customerNameVal = String(body.customer_name || '');
 
   db.prepare('INSERT INTO store_orders (id, store_id, table_number, customer_name, customer_phone, customer_email, staff_name, order_type, status, subtotal, tax, discount, total, note, payment_method, payment_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(orderId, storeId, body.table_number || '', customerNameVal, body.customer_phone || '', body.customer_email || '', staffNameVal, body.order_type || 'dine_in', body.status || 'pending', subtotal, combinedTax, discount, total, noteFinal, body.payment_method || 'cash', body.payment_status || 'unpaid');
+   .run(orderId, storeId, String(body.table_number || '').slice(0,20), String(customerNameVal || '').slice(0,80), String(body.customer_phone || '').slice(0,20), String(body.customer_email || '').slice(0,120), String(staffNameVal || '').slice(0,80), orderTypeVal, orderStatusVal, subtotal, combinedTax, discount, total, String(noteFinal || '').slice(0,500), paymentMethodVal, paymentStatusVal);
 
   var insertItem = db.prepare('INSERT INTO order_items (id, order_id, menu_item_id, name, price, qty, note) VALUES (?, ?, ?, ?, ?, ?, ?)');
   body.items.forEach(function(item) {
-    insertItem.run('oi_' + generateId(), orderId, item.menu_item_id || null, item.name, item.price || 0, item.qty || 1, item.note || '');
+    insertItem.run('oi_' + generateId(), orderId, String(item.menu_item_id || '').slice(0,60) || null, String(item.name || '').slice(0,120), Number(item.price || 0) || 0, Math.floor(Number(item.qty || 1)) || 1, String(item.note || '').slice(0,300));
   });
 
   var order = db.prepare('SELECT * FROM store_orders WHERE id = ?').get(orderId);
   order.items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(orderId);
 
-  if (!body.skip_notifications) {
+if (!skipNotif) {
     queueMessage(db, storeId, 'whatsapp', store.whatsapp_number || store.phone || '', 'New order #' + orderId.slice(-6).toUpperCase() + ' from ' + (order.customer_name || order.staff_name || 'Customer') + '.', 'order', orderId);
     if (body.customer_phone) queueMessage(db, storeId, 'whatsapp', body.customer_phone, 'Your order at ' + store.name + ' was received. Order #' + orderId.slice(-6).toUpperCase() + '.', 'order', orderId);
   }
 
   if (order.customer_email) {
     var orderItemsHtml = (order.items || []).map(function(it) {
-      return '<tr><td style="padding:4px 0;">' + (it.name || '') + ' × ' + (it.qty || 1) + '</td><td style="padding:4px 0;text-align:right;">' + Number(it.price || 0).toFixed(2) + '</td></tr>';
+      return '<tr><td style="padding:4px 0;">' + String(it.name || '').replace(/[&<>"']/g, function(c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[c]; }) + ' × ' + (it.qty || 1) + '</td><td style="padding:4px 0;text-align:right;">' + Number(it.price || 0).toFixed(2) + '</td></tr>';
     }).join('');
     sendConfirmationEmail(order.customer_email, 'Order Confirmed ✅ — ' + (store.name || 'Ocean SFT'), emailTemplates.orderConfirmationEmail(store.name, (order.customer_name || order.staff_name || 'Customer'), orderItemsHtml, Number(order.total || 0) + ' ' + (store.currency || ''), order.id));
   }
@@ -816,12 +935,9 @@ if (!body.customer_name || !body.booking_date || !body.booking_time) return json
       if (!canManageStore(user, store) && publicRateLimited(req, 'booking:' + storeId, 10, 60 * 60 * 1000)) return json(res, 429, { error: 'Too many booking requests. Please try again later.' });
       body.customer_name = String(body.customer_name).slice(0, 100);
       body.note = String(body.note || '').slice(0, 500);
-      if (!canManageStore(user, store) && publicRateLimited(req, 'booking:' + storeId, 10, 60 * 60 * 1000)) return json(res, 429, { error: 'Too many booking requests. Please try again later.' });
-      body.customer_name = String(body.customer_name).slice(0, 100);
-      body.note = String(body.note || '').slice(0, 500);
       var bookingId = 'book_' + generateId();
       db.prepare('INSERT INTO store_bookings (id, store_id, customer_name, customer_phone, customer_email, service_name, booking_date, booking_time, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(bookingId, storeId, body.customer_name, body.customer_phone || '', body.customer_email || '', body.service_name || '', body.booking_date, body.booking_time, body.note || '');
+       .run(bookingId, storeId, body.customer_name, String(body.customer_phone || '').slice(0, 40), String(body.customer_email || '').trim().slice(0, 120), String(body.service_name || '').slice(0, 200), String(body.booking_date).slice(0, 20), String(body.booking_time).slice(0, 20), body.note || '');
       var booking = db.prepare('SELECT * FROM store_bookings WHERE id = ?').get(bookingId);
       // Send the customer a branded booking confirmation (non-blocking)
       if (booking.customer_email) {
@@ -848,7 +964,8 @@ if (!body.customer_name || !body.booking_date || !body.booking_time) return json
       var bookingStore = getStore(booking.store_id);
       if (requireStoreOwner(res, user, bookingStore)) return;
       switchToStoreOwner(booking.store_id);
-      var status = body.status || booking.status;
+var status = String(body.status || booking.status || '').trim();
+      if (!/^[A-Za-z_ -]{1,30}$/.test(status)) return json(res, 400, { error: 'Invalid status.' });
       db.prepare('UPDATE store_bookings SET status=?, updated_at=datetime(\'now\') WHERE id=?').run(status, bookingId);
       booking.status = status;
       if (booking.customer_phone) queueMessage(db, booking.store_id, 'whatsapp', booking.customer_phone, 'Your booking at ' + (bookingStore && bookingStore.name) + ' is now ' + status + '.', 'booking', bookingId);
@@ -868,7 +985,8 @@ if (!body.customer_name || !body.booking_date || !body.booking_time) return json
       var storeId = urlPath.split('/')[4];
       var store = normalizeStore(getStore(storeId));
       if (!store) return json(res, 404, { error: 'Store not found.' });
-      var text = String(body.message || '').toLowerCase();
+if (publicRateLimited(req, 'aichat:' + storeId, 30, 60 * 60 * 1000)) return json(res, 429, { error: 'Too many requests. Please try again later.' });
+var text = String(body.message || '').slice(0, 1000).toLowerCase();
       var reply = 'Thanks for contacting ' + store.name + '. ';
       if (text.indexOf('book') >= 0 || text.indexOf('appointment') >= 0 || text.indexOf('schedule') >= 0) {
         reply += store.booking_enabled ? 'You can request a booking from the booking form on this page.' : 'Bookings are currently disabled.';
@@ -889,13 +1007,10 @@ if (!body.customer_name || !body.booking_date || !body.booking_time) return json
       switchToStoreOwner(storeId);
       var reviews = [];
 try { reviews = db.prepare('SELECT * FROM store_reviews WHERE store_id = ? AND is_approved = 1 ORDER BY created_at DESC').all(storeId); } catch(e){}
-      var revStoreRow = getStore(storeId);
+           var revStoreRow = getStore(storeId);
       if (!canManageStore(user, revStoreRow)) reviews.forEach(function(r) { delete r.customer_email; });
-      var revStoreRow = getStore(storeId);
-      if (!canManageStore(user, revStoreRow)) reviews.forEach(function(r) { delete r.customer_email; });
-      return json(res, 200, { ok: true, reviews: reviews });
-    }
-
+return json(res, 200, { ok: true, reviews: reviews });
+}
     if (urlPath.match(/^\/api\/ecosystem\/stores\/[^/]+\/reviews$/) && method === 'POST') {
       var storeId = urlPath.split('/')[4];
       if (!getStore(storeId)) return json(res, 404, { error: 'Store not found.' });
@@ -920,7 +1035,7 @@ var ratingN = Math.round(Number(body.rating));
       var rStore = getStore(review.store_id);
       if (requireStoreOwner(res, user, rStore)) return;
       switchToStoreOwner(review.store_id);
-      db.prepare('UPDATE store_reviews SET reply = ? WHERE id = ?').run(body.reply || '', reviewId);
+db.prepare('UPDATE store_reviews SET reply = ? WHERE id = ?').run(String(body.reply || '').slice(0, 1000), reviewId);
       return json(res, 200, { ok: true });
     }
 
@@ -947,13 +1062,13 @@ var ratingN = Math.round(Number(body.rating));
       if (!syncStore) return json(res, 404, { error: 'Gym store not found.' });
       if (requireStoreOwner(res, user, syncStore)) return;
       switchToStoreOwner(syncStore.id);
-      var members = Array.isArray(body.members) ? body.members : [];
+      var members = Array.isArray(body.members) ? body.members.slice(0, 2000) : [];
       var upsert = db.prepare('INSERT INTO gym_members (id, store_id, email, name, phone, plan, price, expiry, status, joined, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\')) ON CONFLICT(store_id, email) DO UPDATE SET name=excluded.name, phone=excluded.phone, plan=excluded.plan, price=excluded.price, expiry=excluded.expiry, status=excluded.status, joined=excluded.joined, updated_at=datetime(\'now\')');
       var count = 0;
       members.forEach(function(m) {
         var email = String(m.email || '').trim().toLowerCase();
         if (!email) return;
-        upsert.run('gm_' + generateId(), syncStore.id, email, m.name || '', m.phone || '', m.plan || 'Basic', Number(m.price || 0), m.expiry || '', m.status || 'Active', m.joined || '');
+upsert.run('gm_' + generateId(), syncStore.id, email.slice(0, 200), String(m.name || '').slice(0, 200), String(m.phone || '').slice(0, 40), String(m.plan || 'Basic').slice(0, 120), Math.min(100000000, Math.max(0, Number(m.price) || 0)), String(m.expiry || '').slice(0, 20), String(m.status || 'Active').slice(0, 30), String(m.joined || '').slice(0, 20));
         count++;
       });
       return json(res, 200, { ok: true, store_id: syncStore.id, synced: count, members: db.prepare('SELECT * FROM gym_members WHERE store_id = ?').all(syncStore.id) });
@@ -1021,7 +1136,7 @@ var checkinEmail = actingEmail(body.email, body.store_id ? getStore(body.store_i
       var checkinId = 'gci_' + generateId();
       var time = new Date().toTimeString().slice(0, 5);
       db.prepare('INSERT INTO gym_checkins (id, store_id, member_email, member_name, date, time, lat, lng, distance, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(checkinId, pickStore.id, checkinEmail, pick.name, today, time, lat, lng, Math.round(dist), body.source || 'app');
+        .run(checkinId, pickStore.id, checkinEmail, pick.name, today, time, lat, lng,Math.round(dist), String(body.source || 'app').slice(0, 30));
       return json(res, 201, { ok: true, checkedIn: true, already: false, id: checkinId, time: time, distance: Math.round(dist) });
     }
 
@@ -1094,7 +1209,8 @@ var pEmail = actingEmail(body.email, body.store_id ? getStore(body.store_id) : n
     if (urlPath === '/api/ecosystem/gym/presence/leave' && method === 'POST') {
       if (requireLogin(res, user)) return;
 var lEmail = actingEmail(body.email, body.store_id ? getStore(body.store_id) : null);
-      var lStore = body.store_id ? getStore(body.store_id) : findGymStore('');
+if (!body.store_id) return json(res, 400, { error: 'store_id is required.' });
+var lStore = getStore(body.store_id);
       if (lStore) switchToStoreOwner(lStore.id);
       if (body.store_id) {
         db.prepare('DELETE FROM gym_presence WHERE store_id = ? AND member_email = ?').run(body.store_id, lEmail);
@@ -1199,13 +1315,14 @@ var myGymStoreIds = scanRows('SELECT store_id FROM gym_members WHERE email = ?',
       if (!saveStore) return json(res, 404, { error: 'Gym store not found.' });
       if (requireStoreOwner(res, user, saveStore)) return;
       switchToStoreOwner(saveStore.id);
-      if (!Array.isArray(body.plans)) return json(res, 400, { error: 'plans array required.' });
+if (!Array.isArray(body.plans)) return json(res, 400, { error: 'plans array required.' });
+      if (body.plans.length > 50) return json(res, 400, { error: 'Too many plans.' });
       db.prepare('DELETE FROM gym_plans WHERE store_id = ?').run(saveStore.id);
       var insPlan = db.prepare('INSERT INTO gym_plans (id, store_id, name, price, duration, duration_days, features, featured) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
       body.plans.forEach(function(p) {
         var name = String(p.name || '').slice(0, 120);
         if (!name) return;
-        insPlan.run('gp_' + generateId(), saveStore.id, name, Number(p.price || 0), Number(p.duration || 30), Number(p.duration_days || p.duration || 30), JSON.stringify(Array.isArray(p.features) ? p.features : []), p.featured ? 1 : 0);
+insPlan.run('gp_' + generateId(), saveStore.id, name, Math.min(100000000, Math.max(0, Number(p.price) || 0)), Math.min(3650, Math.max(1, Math.floor(Number(p.duration) || 30))), Math.min(3650, Math.max(1, Math.floor(Number(p.duration_days || p.duration) || 30))), JSON.stringify(Array.isArray(p.features) ? p.features.slice(0, 30) : []), p.featured ? 1 : 0);
       });
       return json(res, 200, { ok: true, store_id: saveStore.id, plans: db.prepare('SELECT * FROM gym_plans WHERE store_id = ? ORDER BY price ASC').all(saveStore.id) });
     }
@@ -1274,7 +1391,7 @@ function actingEmail(bodyEmail, store) {
       if (!cName) return json(res, 400, { error: 'Class name required.' });
       var cId = 'gcl_' + generateId();
       db.prepare('INSERT INTO gym_classes (id, store_id, name, trainer_id, trainer_name, description, day, start_time, end_time, capacity, color, is_recurring, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(cId, cStore.id, cName, String(body.trainer_id || ''), String(body.trainer_name || ''), String(body.description || ''), Number(body.day || 0), String(body.start_time || '09:00'), String(body.end_time || '10:00'), Number(body.capacity || 20), String(body.color || '#38bdf8'), body.is_recurring === 0 ? 0 : 1, body.status === 'inactive' ? 'inactive' : 'active');
+        .run(cId, cStore.id, cName.slice(0, 200), String(body.trainer_id || '').slice(0, 60), String(body.trainer_name || '').slice(0, 200), String(body.description || '').slice(0, 2000), Math.min(7, Math.max(0, Math.floor(Number(body.day) || 0))), String(body.start_time || '09:00').slice(0, 10), String(body.end_time || '10:00').slice(0, 10), Math.min(1000, Math.max(1, Math.floor(Number(body.capacity) || 20))), String(body.color || '#38bdf8').slice(0, 20), body.is_recurring === 0 ? 0 : 1, body.status === 'inactive' ? 'inactive' : 'active');
       return json(res, 201, { ok: true, id: cId, class: db.prepare('SELECT * FROM gym_classes WHERE id = ?').get(cId) });
     }
 
@@ -1289,7 +1406,7 @@ function actingEmail(bodyEmail, store) {
       var cuRow = db.prepare('SELECT * FROM gym_classes WHERE id = ? AND store_id = ?').get(cuId, cuStore.id);
       if (!cuRow) return json(res, 404, { error: 'Class not found.' });
       db.prepare('UPDATE gym_classes SET name = ?, trainer_id = ?, trainer_name = ?, description = ?, day = ?, start_time = ?, end_time = ?, capacity = ?, color = ?, is_recurring = ?, status = ? WHERE id = ?')
-        .run(String(body.name || cuRow.name), String(body.trainer_id || ''), String(body.trainer_name || ''), String(body.description || ''), Number(body.day != null ? body.day : cuRow.day), String(body.start_time || cuRow.start_time), String(body.end_time || cuRow.end_time), Number(body.capacity || cuRow.capacity), String(body.color || cuRow.color), body.is_recurring === 0 ? 0 : 1, body.status === 'inactive' ? 'inactive' : 'active', cuId);
+.run(String(body.name || cuRow.name).trim().slice(0, 200) || cuRow.name, String(body.trainer_id || '').slice(0, 60), String(body.trainer_name || '').slice(0, 200), String(body.description || '').slice(0, 2000), Math.min(7, Math.max(0, Math.floor(Number(body.day != null ? body.day : cuRow.day) || 0))), String(body.start_time || cuRow.start_time).slice(0, 10), String(body.end_time || cuRow.end_time).slice(0, 10), Math.min(1000, Math.max(1, Math.floor(Number(body.capacity || cuRow.capacity) || 20))), String(body.color || cuRow.color).slice(0, 20), body.is_recurring === 0 ? 0 : 1, body.status === 'inactive' ? 'inactive' : 'active', cuId);
       return json(res, 200, { ok: true });
     }
 
@@ -1356,8 +1473,13 @@ var ccEmail = actingEmail(body.email, ccStore);
     }
 
     // ============ MEMBER PROFILE & BODY METRICS ============
-    function findGymMemberById(dbx, id) {
-      try { return dbx.prepare('SELECT * FROM gym_members WHERE id = ?').get(id); } catch(e){ return null; }
+    function findGymMemberById(dbx, id, storeId) {
+      try {
+        var gmRow = dbx.prepare('SELECT * FROM gym_members WHERE id = ?').get(id);
+        if (!gmRow) return null;
+        if (storeId && String(gmRow.store_id || '') !== String(storeId || '')) return null;
+        return gmRow;
+      } catch(e){ return null; }
     }
 
     // Owner: get member profile + latest metrics
@@ -1368,7 +1490,7 @@ var ccEmail = actingEmail(body.email, ccStore);
       if (requireStoreOwner(res, user, pStore)) return;
       switchToStoreOwner(pStore.id);
       var pMid = String(new URL(req.url, 'http://localhost').searchParams.get('member_id') || '');
-      var pMember = findGymMemberById(db, pMid);
+var pMember = findGymMemberById(db, pMid, pStore.id);
       if (!pMember) return json(res, 404, { error: 'Member not found.' });
       var profile = null;
       try { profile = db.prepare('SELECT * FROM gym_member_profiles WHERE member_id = ?').get(pMid); } catch(e){}
@@ -1387,9 +1509,9 @@ var ccEmail = actingEmail(body.email, ccStore);
       if (requireStoreOwner(res, user, psStore)) return;
       switchToStoreOwner(psStore.id);
       var psMid = String(body.member_id || '');
-      if (!findGymMemberById(db, psMid)) return json(res, 404, { error: 'Member not found.' });
+if (!findGymMemberById(db, psMid, psStore.id)) return json(res, 404, { error: 'Member not found.' });
       var exists = db.prepare('SELECT id FROM gym_member_profiles WHERE member_id = ?').get(psMid);
-      var vals = [Number(body.height_cm || 0), String(body.gender || ''), String(body.dob || ''), String(body.goal || ''), String(body.activity_level || 'moderate'), String(body.health_conditions || ''), String(body.emergency_contact || ''), String(body.emergency_phone || ''), String(body.notes || '')];
+var vals = [Math.min(300, Math.max(0, Number(body.height_cm) || 0)), String(body.gender || '').slice(0, 30), String(body.dob || '').slice(0, 20), String(body.goal || '').slice(0, 200), String(body.activity_level || 'moderate').slice(0, 30), String(body.health_conditions || '').slice(0, 1000), String(body.emergency_contact || '').slice(0, 200), String(body.emergency_phone || '').slice(0, 40), String(body.notes || '').slice(0, 2000)];
       if (exists) {
         var upStmt = db.prepare('UPDATE gym_member_profiles SET height_cm = ?, gender = ?, dob = ?, goal = ?, activity_level = ?, health_conditions = ?, emergency_contact = ?, emergency_phone = ?, notes = ?, updated_at = datetime(\'now\') WHERE member_id = ?');
         upStmt.run.apply(upStmt, vals.concat([psMid]));
@@ -1409,14 +1531,14 @@ var ccEmail = actingEmail(body.email, ccStore);
       if (requireStoreOwner(res, user, mStore)) return;
       switchToStoreOwner(mStore.id);
       var mmid = String(body.member_id || '');
-      var mmember = findGymMemberById(db, mmid);
+var mmember = findGymMemberById(db, mmid, mStore.id);
       if (!mmember) return json(res, 404, { error: 'Member not found.' });
-      var w = Number(body.weight_kg || 0);
-      var h = Number(body.height_cm || 0);
+var w = Math.min(1000, Math.max(0, Number(body.weight_kg) || 0));
+var h = Math.min(300, Math.max(0, Number(body.height_cm) || 0));
       var bmi = h > 0 ? Math.round((w / ((h / 100) * (h / 100))) * 10) / 10 : 0;
       var mId = 'gbm_' + generateId();
       db.prepare('INSERT INTO gym_body_metrics (id, store_id, member_id, weight_kg, body_fat, muscle_kg, bmi, chest_cm, waist_cm, hip_cm, bicep_cm, thigh_cm, measured_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))')
-        .run(mId, mStore.id, mmid, w, Number(body.body_fat || 0), Number(body.muscle_kg || 0), bmi, Number(body.chest_cm || 0), Number(body.waist_cm || 0), Number(body.hip_cm || 0), Number(body.bicep_cm || 0), Number(body.thigh_cm || 0));
+        .run(mId, mStore.id, mmid, w, Math.min(1000, Math.max(0, Number(body.body_fat) || 0)), Math.min(1000, Math.max(0, Number(body.muscle_kg) || 0)), bmi, Math.min(1000, Math.max(0, Number(body.chest_cm) || 0)), Math.min(1000, Math.max(0, Number(body.waist_cm) || 0)), Math.min(1000, Math.max(0, Number(body.hip_cm) || 0)), Math.min(1000, Math.max(0, Number(body.bicep_cm) || 0)), Math.min(1000, Math.max(0, Number(body.thigh_cm) || 0)));
       return json(res, 201, { ok: true, id: mId, bmi: bmi, metrics: db.prepare('SELECT * FROM gym_body_metrics WHERE member_id = ? ORDER BY measured_at ASC').all(mmid) });
     }
 
@@ -1429,22 +1551,24 @@ var ccEmail = actingEmail(body.email, ccStore);
       if (requireStoreOwner(res, user, rStore)) return;
       switchToStoreOwner(rStore.id);
       var rMid = String(body.member_id || '');
-      var rMember = findGymMemberById(db, rMid);
+var rMember = findGymMemberById(db, rMid, rStore.id);
       if (!rMember) return json(res, 404, { error: 'Member not found.' });
-      var days = Number(body.days || 0);
+var days = Math.floor(Number(body.days || 0));
       if (!days) {
         var planRow = null;
         try { planRow = db.prepare('SELECT * FROM gym_plans WHERE store_id = ? AND name = ?').get(rStore.id, rMember.plan); } catch(e){}
         days = (planRow && planRow.duration_days) ? Number(planRow.duration_days) : 30;
       }
       var base = rMember.expiry && String(rMember.expiry) >= new Date().toISOString().slice(0, 10) ? new Date(String(rMember.expiry) + 'T23:59:59') : new Date();
+    if (!isFinite(days) || days < 1 || days > 730) return json(res, 400, { error: 'Days must be between 1 and 730.' });
       base.setDate(base.getDate() + days);
       var newExpiry = base.toISOString().slice(0, 10);
-      var amount = Number(body.amount != null ? body.amount : rMember.price || 0);
+var amount = Number(body.amount != null ? body.amount : rMember.price || 0);
+if (!isFinite(amount) || amount < 0) amount = 0;
       db.prepare('UPDATE gym_members SET expiry = ?, status = ?, updated_at = datetime(\'now\'), last_renewed = datetime(\'now\') WHERE id = ?').run(newExpiry, 'Active', rMid);
       var payId = 'gpay_' + generateId();
       db.prepare('INSERT INTO gym_member_payments (id, store_id, member_id, member_email, member_name, type, amount, method, reference, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(payId, rStore.id, rMid, rMember.email, rMember.name, body.type || 'renewal', amount, body.method || 'cash', String(body.reference || ''), 'Renewed ' + days + ' days');
+.run(payId, rStore.id, rMid, rMember.email, rMember.name, String(body.type || 'renewal').slice(0, 30), amount, String(body.method || 'cash').slice(0, 30), String(body.reference || '').slice(0, 120), 'Renewed ' + days + ' days');
       return json(res, 200, { ok: true, expiry: newExpiry, days: days, amount: amount });
     }
 
@@ -1456,7 +1580,7 @@ var ccEmail = actingEmail(body.email, ccStore);
       if (requireStoreOwner(res, user, fStore)) return;
       switchToStoreOwner(fStore.id);
       var fMid = String(body.member_id || '');
-      if (!findGymMemberById(db, fMid)) return json(res, 404, { error: 'Member not found.' });
+if (!findGymMemberById(db, fMid, fStore.id)) return json(res, 404, { error: 'Member not found.' });
       db.prepare('UPDATE gym_members SET status = ?, updated_at = datetime(\'now\') WHERE id = ?').run('Frozen', fMid);
       return json(res, 200, { ok: true, status: 'Frozen' });
     }
@@ -1469,7 +1593,7 @@ var ccEmail = actingEmail(body.email, ccStore);
       if (requireStoreOwner(res, user, uStore)) return;
       switchToStoreOwner(uStore.id);
       var uMid = String(body.member_id || '');
-      if (!findGymMemberById(db, uMid)) return json(res, 404, { error: 'Member not found.' });
+      if (!findGymMemberById(db, uMid, uStore.id)) return json(res, 404, { error: 'Member not found.' });
       db.prepare('UPDATE gym_members SET status = ?, updated_at = datetime(\'now\') WHERE id = ?').run('Active', uMid);
       return json(res, 200, { ok: true, status: 'Active' });
     }
@@ -1482,15 +1606,17 @@ var ccEmail = actingEmail(body.email, ccStore);
       if (requireStoreOwner(res, user, tStore)) return;
       switchToStoreOwner(tStore.id);
       var tm = String(body.member_id || '');
-      var tMem = findGymMemberById(db, tm);
+var tMem = findGymMemberById(db, tm, tStore.id);
       if (!tMem) return json(res, 404, { error: 'Member not found.' });
-      var newPlan = String(body.plan || tMem.plan);
+      var newPlan = String(body.plan || tMem.plan).slice(0, 120);
       var newPrice = Number(body.price != null ? body.price : tMem.price);
+      if (!isFinite(newPrice) || newPrice < 0) newPrice = 0;
+      if (newPrice > 100000000) newPrice = 100000000;
       var was = tMem.plan;
       db.prepare('UPDATE gym_members SET plan = ?, price = ?, updated_at = datetime(\'now\') WHERE id = ?').run(newPlan, newPrice, tm);
       var tpId = 'gpay_' + generateId();
       db.prepare('INSERT INTO gym_member_payments (id, store_id, member_id, member_email, member_name, type, amount, method, reference, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(tpId, tStore.id, tm, tMem.email, tMem.name, body.type || 'upgrade', newPrice, body.method || 'cash', String(body.reference || ''), 'Plan changed: ' + was + ' -> ' + newPlan);
+.run(tpId, tStore.id, tm, tMem.email, tMem.name, String(body.type || 'upgrade').slice(0, 30), newPrice, String(body.method || 'cash').slice(0, 30), String(body.reference || '').slice(0, 120), String('Plan changed: ' + was + ' -> ' + newPlan).slice(0, 500));
       return json(res, 200, { ok: true, plan: newPlan, price: newPrice });
     }
 
@@ -1514,11 +1640,13 @@ var ccEmail = actingEmail(body.email, ccStore);
       if (requireStoreOwner(res, user, gdStore)) return;
       switchToStoreOwner(gdStore.id);
       var gdMid = String(body.member_id || '');
-      if (!findGymMemberById(db, gdMid)) return json(res, 404, { error: 'Member not found.' });
-      db.prepare('DELETE FROM gym_members WHERE id = ?').run(gdMid);
+      var gdMem = findGymMemberById(db, gdMid, gdStore.id);
+      if (!gdMem) return json(res, 404, { error: 'Member not found.' });
+      var gdEmail = String(gdMem.email || '').trim().toLowerCase();
       db.prepare('DELETE FROM gym_member_profiles WHERE member_id = ?').run(gdMid);
       db.prepare('DELETE FROM gym_body_metrics WHERE member_id = ?').run(gdMid);
-      db.prepare('DELETE FROM gym_class_bookings WHERE member_email IN (SELECT email FROM gym_members WHERE id = ?)').run(gdMid);
+      if (gdEmail) db.prepare('DELETE FROM gym_class_bookings WHERE store_id = ? AND member_email = ?').run(gdStore.id, gdEmail);
+      db.prepare('DELETE FROM gym_members WHERE id = ?').run(gdMid);
       return json(res, 200, { ok: true });
     }
 
@@ -1530,11 +1658,15 @@ var ccEmail = actingEmail(body.email, ccStore);
       if (requireStoreOwner(res, user, aStore)) return;
       switchToStoreOwner(aStore.id);
       var am = String(body.member_id || '');
-      var aMem = findGymMemberById(db, am);
+var aMem = findGymMemberById(db, am);
+if (aMem && String(aMem.store_id || '') !== String(aStore.id || '')) aMem = null;
       if (!aMem) return json(res, 404, { error: 'Member not found.' });
-      var apId = 'gpay_' + generateId();
+var apId = 'gpay_' + generateId();
+var apAmount = Number(body.amount || 0);
+if (!isFinite(apAmount) || apAmount < 0) apAmount = 0;
+if (apAmount > 100000000) apAmount = 100000000;
       db.prepare('INSERT INTO gym_member_payments (id, store_id, member_id, member_email, member_name, type, amount, method, reference, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(apId, aStore.id, am, aMem.email, aMem.name, body.type || 'other', Number(body.amount || 0), body.method || 'cash', String(body.reference || ''), String(body.note || ''));
+.run(apId, aStore.id, am, aMem.email, aMem.name, String(body.type || 'other').slice(0, 30), apAmount, String(body.method || 'cash').slice(0, 30), String(body.reference || '').slice(0, 120), String(body.note || '').slice(0, 500));
       return json(res, 201, { ok: true, id: apId });
     }
 
@@ -1545,10 +1677,12 @@ var ccEmail = actingEmail(body.email, ccStore);
       if (!rdStore) return json(res, 404, { error: 'Gym store not found.' });
       if (requireStoreOwner(res, user, rdStore)) return;
       switchToStoreOwner(rdStore.id);
-      var horizon = Number(new URL(req.url, 'http://localhost').searchParams.get('days') || 14);
+var horizon = Math.floor(Number(new URL(req.url, 'http://localhost').searchParams.get('days') || 14));
+if (!isFinite(horizon) || horizon < 1) horizon = 14;
+if (horizon > 90) horizon = 90;
       var today = new Date().toISOString().slice(0, 10);
       var horizonDate = new Date(Date.now() + horizon * 86400000).toISOString().slice(0, 10);
-      var rows = db.prepare('SELECT * FROM gym_members WHERE status = ? ORDER BY expiry ASC').all('Active');
+      var rows = db.prepare('SELECT * FROM gym_members WHERE store_id = ? AND status = ? ORDER BY expiry ASC').all(rdStore.id, 'Active');
       var due = rows.filter(function(m) { return m.expiry && m.expiry >= today && m.expiry <= horizonDate; })
         .map(function(m) { var d = Math.max(0, Math.round((new Date(m.expiry + 'T00:00:00').getTime() - Date.now()) / 86400000)); return Object.assign({}, m, { days_left: d }); });
       var expired = rows.filter(function(m) { return m.expiry && m.expiry < today; }).map(function(m) { return Object.assign({}, m, { days_left: Math.round((Date.now() - new Date(m.expiry + 'T00:00:00').getTime()) / 86400000) * -1 }); });
@@ -1607,7 +1741,7 @@ var ccEmail = actingEmail(body.email, ccStore);
         var classes = db.prepare('SELECT * FROM gym_classes WHERE store_id = ?').all(anStore.id);
         classStats = classes.map(function(c) {
           var b = db.prepare('SELECT COUNT(*) as c FROM gym_class_bookings WHERE class_id = ? AND status = ?').get(c.id, 'booked').c;
-          return { id: c.id, name: c.name, capacity: c.capacity, enrolled: b, utilization: Math.min(100, Math.round((b / c.capacity) * 100)), day: c.day, start_time: c.start_time };
+          return { id: c.id, name: c.name, capacity: c.capacity, enrolled: b,utilization: Math.min(100, Math.round((b / (Number(c.capacity) || 1)) * 100)), day: c.day, start_time: c.start_time };
         }).sort(function(a, b) { return b.utilization - a.utilization; });
       } catch(e){}
       var totalRevenue = 0;
@@ -1640,12 +1774,12 @@ var ccEmail = actingEmail(body.email, ccStore);
         var stRow = db.prepare('SELECT * FROM gym_staff WHERE id = ? AND store_id = ?').get(stId, st2.id);
         if (!stRow) return json(res, 404, { error: 'Staff not found.' });
         db.prepare('UPDATE gym_staff SET name = ?, role = ?, email = ?, phone = ?, salary = ?, commission_pct = ?, specialty = ?, active = ?, joined = ? WHERE id = ?')
-          .run(stName, body.role || stRow.role, String(body.email || ''), String(body.phone || ''), Number(body.salary || 0), Number(body.commission_pct || 0), String(body.specialty || ''), body.active === 0 ? 0 : 1, String(body.joined || stRow.joined), stId);
+.run(stName.slice(0, 200), String(body.role || stRow.role).slice(0, 60), String(body.email || '').slice(0, 200), String(body.phone || '').slice(0, 40), Math.min(100000000, Math.max(0, Number(body.salary) || 0)), Math.min(100, Math.max(0, Number(body.commission_pct) || 0)), String(body.specialty || '').slice(0, 200), body.active === 0 ? 0 : 1, String(body.joined || stRow.joined).slice(0, 20), stId);
         return json(res, 200, { ok: true });
       }
       var nStaff = 'gst_' + generateId();
       db.prepare('INSERT INTO gym_staff (id, store_id, name, role, email, phone, salary, commission_pct, specialty, active, joined) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(nStaff, st2.id, stName, body.role || 'trainer', String(body.email || ''), String(body.phone || ''), Number(body.salary || 0), Number(body.commission_pct || 0), String(body.specialty || ''), body.active === 0 ? 0 : 1, String(body.joined || new Date().toISOString().slice(0, 10)));
+.run(nStaff, st2.id, stName.slice(0, 200), String(body.role || 'trainer').slice(0, 60), String(body.email || '').slice(0, 200), String(body.phone || '').slice(0, 40), Math.min(100000000, Math.max(0, Number(body.salary) || 0)), Math.min(100, Math.max(0, Number(body.commission_pct) || 0)), String(body.specialty || '').slice(0, 200), body.active === 0 ? 0 : 1, String(body.joined || new Date().toISOString().slice(0, 10)).slice(0, 20));
       return json(res, 201, { ok: true, id: nStaff });
     }
 
@@ -1922,6 +2056,9 @@ var tQuery = String(body.query || '').slice(0, 1000);
     var invQuery = new URL(req.url, 'http://localhost').searchParams;
     function qStoreId() { return body.store_id || invQuery.get('store_id') || ''; }
     var m;
+    function ensureInvIdem() {
+      db.exec('CREATE TABLE IF NOT EXISTS inventory_idempotency (id TEXT PRIMARY KEY, store_id TEXT, kind TEXT, ref_id TEXT, created_at TEXT)');
+    }
 
     // ---------- 1) STOCK ADJUSTMENTS ----------
     if (method === 'POST' && (m = urlPath.match(/^\/api\/ecosystem\/stores\/([^/]+)\/stock-adjustments$/))) {
@@ -1931,17 +2068,17 @@ var tQuery = String(body.query || '').slice(0, 1000);
       if (requireStoreOwner(res, user, saStore)) return null;
       var saItemId = String(body.item_id || '');
       var saQtyChange = Number(body.qty_change);
-      if (!saItemId || !isFinite(saQtyChange) || saQtyChange === 0) {
+if (!saItemId || !isFinite(saQtyChange) || saQtyChange === 0 || Math.abs(saQtyChange) > 1000000) {
         return json(res, 400, { error: 'item_id and non-zero qty_change are required.' });
       }
       var saResult = adjustStock(saStoreId, saItemId, saQtyChange, 'manual_adjustment', {
-        reason: String(body.reason || ''), createdBy: actorName, refType: 'stock_adjustment'
+reason: String(body.reason || '').slice(0, 300), createdBy: actorName, refType: 'stock_adjustment'
       });
       if (!saResult) return json(res, 404, { error: 'Item not found.' });
       if (saResult.error) return json(res, 400, { error: saResult.error, available: saResult.available });
       var saId = 'sa_' + generateId();
       db.prepare('INSERT INTO stock_adjustments (id, store_id, item_id, item_name, qty_change, reason, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))')
-        .run(saId, saStoreId, saItemId, saResult.item_name, saQtyChange, String(body.reason || ''), actorName);
+.run(saId, saStoreId, saItemId, saResult.item_name, saQtyChange, String(body.reason || '').slice(0, 300), actorName);
       return json(res, 200, { id: saId, result: saResult });
     }
 
@@ -1984,21 +2121,22 @@ var tQuery = String(body.query || '').slice(0, 1000);
       if (requireStoreOwner(res, user, poStore)) return null;
       var poItemsIn = Array.isArray(body.items) ? body.items : [];
       if (!poItemsIn.length) return json(res, 400, { error: 'At least one item is required.' });
+      if (poItemsIn.length > 200) return json(res, 400, { error: 'Too many items.' });
 var poBad = false;
 poItemsIn.forEach(function(it) {
   var q = Number(it && it.qty_ordered) || 0;
   var c = Number(it && it.unit_cost) || 0;
-  if (!isFinite(q) || q < 0 || !isFinite(c) || c < 0) poBad = true;
+if (!isFinite(q) || q < 0 || q > 1000000 || !isFinite(c) || c < 0 || c > 100000000) poBad = true;
 });
 if (poBad) return json(res, 400, { error: 'Quantities and costs must be zero or positive numbers.' });
 var poId = 'po_' + generateId();
       var poTotal = 0;
       poItemsIn.forEach(function(it) { poTotal += (Number(it.qty_ordered) || 0) * (Number(it.unit_cost) || 0); });
       db.prepare('INSERT INTO purchase_orders (id, store_id, supplier_name, supplier_phone, status, notes, total_cost, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))')
-        .run(poId, poStoreId, String(body.supplier_name || ''), String(body.supplier_phone || ''), 'draft', String(body.notes || ''), poTotal, actorName);
+.run(poId, poStoreId, String(body.supplier_name || '').slice(0, 200), String(body.supplier_phone || '').slice(0, 40), 'draft', String(body.notes || '').slice(0, 1000), poTotal, actorName);
       poItemsIn.forEach(function(it) {
         db.prepare('INSERT INTO purchase_order_items (id, po_id, item_id, item_name, qty_ordered, qty_received, unit_cost) VALUES (?, ?, ?, ?, ?, 0, ?)')
-          .run('poi_' + generateId(), poId, String(it.item_id || ''), String(it.item_name || ''), Number(it.qty_ordered) || 0, Number(it.unit_cost) || 0);
+.run('poi_' + generateId(), poId, String(it.item_id || '').slice(0, 60), String(it.item_name || '').slice(0, 200), Number(it.qty_ordered) || 0, Number(it.unit_cost) || 0);
       });
       return json(res, 200, {
         purchase_order: db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(poId),
@@ -2040,11 +2178,13 @@ var poId = 'po_' + generateId();
       if (poPatchRow.status === 'received' || poPatchRow.status === 'cancelled') {
         return json(res, 400, { error: 'Cannot edit a ' + poPatchRow.status + ' purchase order.' });
       }
+var poPatchStatus = body.status != null ? String(body.status).trim().toLowerCase() : poPatchRow.status;
+      if (body.status != null && (!/^[a-z_]{1,30}$/.test(poPatchStatus) || poPatchStatus === 'received' || poPatchStatus === 'partial')) return json(res, 400, { error: 'Invalid status.' });
       db.prepare('UPDATE purchase_orders SET status = ?, notes = ?, supplier_name = ?, supplier_phone = ? WHERE id = ?').run(
-        body.status != null ? String(body.status) : poPatchRow.status,
-        body.notes != null ? String(body.notes) : poPatchRow.notes,
-        body.supplier_name != null ? String(body.supplier_name) : poPatchRow.supplier_name,
-        body.supplier_phone != null ? String(body.supplier_phone) : poPatchRow.supplier_phone,
+poPatchStatus,
+        body.notes != null ? String(body.notes).slice(0, 1000) : poPatchRow.notes,
+body.supplier_name != null ? String(body.supplier_name).slice(0, 200) : poPatchRow.supplier_name,
+body.supplier_phone != null ? String(body.supplier_phone).slice(0, 40) : poPatchRow.supplier_phone,
         poPatchId
       );
       return json(res, 200, { purchase_order: db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(poPatchId) });
@@ -2058,6 +2198,13 @@ var poId = 'po_' + generateId();
       if (requireStoreOwner(res, user, poRecvStore)) return null;
       var poRecvRow = db.prepare('SELECT * FROM purchase_orders WHERE id = ? AND store_id = ?').get(poRecvId, poRecvStoreId);
       if (!poRecvRow) return json(res, 404, { error: 'Purchase order not found.' });
+           ensureInvIdem();
+      var poRecvReqId = String(body.request_id || '').trim().slice(0, 80);
+      var poRecvKey = poRecvReqId ? 'po_recv|' + poRecvId + '|' + poRecvReqId : '';
+      if (poRecvKey) {
+        var poRecvDone = db.prepare('SELECT id FROM inventory_idempotency WHERE id = ?').get(poRecvKey);
+        if (poRecvDone) return json(res, 200, { purchase_order: db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(poRecvId), items: db.prepare('SELECT * FROM purchase_order_items WHERE po_id = ?').all(poRecvId) });
+      }
       if (poRecvRow.status === 'received' || poRecvRow.status === 'cancelled') {
         return json(res, 400, { error: 'This purchase order is already ' + poRecvRow.status + '.' });
       }
@@ -2068,23 +2215,37 @@ var poId = 'po_' + generateId();
         for (var i = 0; i < poRecvOverride.length; i++) { if (poRecvOverride[i].item_id === itemId) return poRecvOverride[i]; }
         return null;
       };
-      poRecvItems.forEach(function(poi) {
-        var ov = poFindOverride(poi.item_id);
-        var qtyToReceive = ov ? Number(ov.qty_received) || 0 : (Number(poi.qty_ordered) - Number(poi.qty_received));
-        if (qtyToReceive > 0) {
-          adjustStock(poRecvStoreId, poi.item_id, qtyToReceive, 'purchase_receive', {
-            refType: 'purchase_order', refId: poRecvId, createdBy: actorName, allowNegative: true
-          });
-          if (poi.unit_cost > 0) {
-            db.prepare('UPDATE menu_items SET cost_price = ? WHERE id = ? AND store_id = ?').run(poi.unit_cost, poi.item_id, poRecvStoreId);
+      try {
+        db.exec('BEGIN');
+        poRecvItems.forEach(function(poi) {
+          var ov = poFindOverride(poi.item_id);
+var qtyToReceive = ov ? Number(ov.qty_received) : (Number(poi.qty_ordered) - Number(poi.qty_received));
+if (!isFinite(qtyToReceive) || qtyToReceive < 0) qtyToReceive = 0;
+var poRecvRemaining = Number(poi.qty_ordered) - Number(poi.qty_received);
+if (!isFinite(poRecvRemaining) || poRecvRemaining < 0) poRecvRemaining = 0;
+if (qtyToReceive > poRecvRemaining) qtyToReceive = poRecvRemaining;
+          if (qtyToReceive > 0) {
+var poRecvAdjustResult = adjustStock(poRecvStoreId, poi.item_id, qtyToReceive, 'purchase_receive', {
+              refType: 'purchase_order', refId: poRecvId, createdBy: actorName, allowNegative: true
+            });
+if (poRecvAdjustResult && !poRecvAdjustResult.error && poi.unit_cost > 0) {
+              db.prepare('UPDATE menu_items SET cost_price = ? WHERE id = ? AND store_id = ?').run(poi.unit_cost, poi.item_id, poRecvStoreId);
+            }
+if (poRecvAdjustResult && !poRecvAdjustResult.error) {
+    db.prepare('UPDATE purchase_order_items SET qty_received = qty_received + ? WHERE id = ?').run(qtyToReceive, poi.id);
+  }
           }
-          db.prepare('UPDATE purchase_order_items SET qty_received = qty_received + ? WHERE id = ?').run(qtyToReceive, poi.id);
-        }
-      });
-      var poRecvItemsAfter = db.prepare('SELECT * FROM purchase_order_items WHERE po_id = ?').all(poRecvId);
-      var poAllReceived = true;
-      poRecvItemsAfter.forEach(function(poi) { if (Number(poi.qty_received) < Number(poi.qty_ordered)) poAllReceived = false; });
-      db.prepare('UPDATE purchase_orders SET status = ?, received_at = datetime(\'now\') WHERE id = ?').run(poAllReceived ? 'received' : 'partial', poRecvId);
+        });
+        var poRecvItemsAfter = db.prepare('SELECT * FROM purchase_order_items WHERE po_id = ?').all(poRecvId);
+        var poAllReceived = true;
+        poRecvItemsAfter.forEach(function(poi) { if (Number(poi.qty_received) < Number(poi.qty_ordered)) poAllReceived = false; });
+        db.prepare('UPDATE purchase_orders SET status = ?, received_at = datetime(\'now\') WHERE id = ?').run(poAllReceived ? 'received' : 'partial', poRecvId);
+        if (poRecvKey) db.prepare('INSERT OR IGNORE INTO inventory_idempotency (id, store_id, kind, ref_id, created_at) VALUES (?, ?, ?, ?, datetime(\'now\'))').run(poRecvKey, poRecvStoreId, 'purchase_receive', poRecvId);
+        db.exec('COMMIT');
+      } catch (e) {
+        try { db.exec('ROLLBACK'); } catch(e2){}
+        throw e;
+      }
       return json(res, 200, { purchase_order: db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(poRecvId), items: poRecvItemsAfter });
     }
 
@@ -2104,15 +2265,19 @@ var poId = 'po_' + generateId();
         return json(res, 400, { error: 'Transfers are only allowed between your own stores.' });
       }
       var toItemsIn = Array.isArray(body.items) ? body.items : [];
-      if (!toItemsIn.length) return json(res, 400, { error: 'At least one item is required.' });
-var toMerged = {};
+if (!toItemsIn.length) return json(res, 400, { error: 'At least one item is required.' });
+      if (toItemsIn.length > 200) return json(res, 400, { error: 'Too many items.' });
+var toMerged = Object.create(null);
 var toBad = false;
 toItemsIn.forEach(function(it) {
   var q = Number(it && it.qty) || 0;
   var iid = String((it && it.item_id) || '');
-  if (!isFinite(q) || q < 0 || (q > 0 && !iid)) { toBad = true; return; }
+if (!isFinite(q) || q < 0 || q > 1000000 || (q > 0 && !iid)) { toBad = true; return; }
   if (q === 0) return;
-  if (!toMerged[iid]) toMerged[iid] = { item_id: iid, item_name: String(it.item_name || '').slice(0, 200), qty: 0, unit_cost: Number(it.unit_cost) || 0 };
+var toUnitCost = Number(it.unit_cost);
+  if (!isFinite(toUnitCost) || toUnitCost < 0) toUnitCost = 0;
+  if (toUnitCost > 100000000) toUnitCost = 100000000;
+  if (!toMerged[iid]) toMerged[iid] = { item_id: iid, item_name: String(it.item_name || '').slice(0, 200), qty: 0, unit_cost: toUnitCost };
   toMerged[iid].qty += q;
 });
 if (toBad) return json(res, 400, { error: 'Each transfer item needs an item_id and a non-negative quantity.' });
@@ -2120,7 +2285,7 @@ toItemsIn = Object.keys(toMerged).map(function(k) { return toMerged[k]; });
 if (!toItemsIn.length) return json(res, 400, { error: 'At least one item with a positive quantity is required.' });
 var toId = 'to_' + generateId();
       db.prepare('INSERT INTO transfer_orders (id, from_store_id, to_store_id, status, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime(\'now\'))')
-        .run(toId, toFromId, toToId, 'pending', String(body.note || ''), actorName);
+.run(toId, toFromId, toToId, 'pending', String(body.note || '').slice(0, 500), actorName);
       toItemsIn.forEach(function(it) {
         db.prepare('INSERT INTO transfer_order_items (id, transfer_id, item_id, item_name, qty, unit_cost) VALUES (?, ?, ?, ?, ?, ?)')
           .run('toi_' + generateId(), toId, String(it.item_id || ''), String(it.item_name || ''), Number(it.qty) || 0, Number(it.unit_cost) || 0);
@@ -2147,20 +2312,38 @@ var toId = 'to_' + generateId();
       if (!toDispStore) return json(res, 404, { error: 'Store not found.' });
       if (requireStoreOwner(res, user, toDispStore)) return null;
       var toDispRow = db.prepare('SELECT * FROM transfer_orders WHERE id = ?').get(toDispId);
-      if (!toDispRow || toDispRow.from_store_id !== toDispStoreId) return json(res, 404, { error: 'Transfer order not found.' });
+            if (!toDispRow || toDispRow.from_store_id !== toDispStoreId) return json(res, 404, { error: 'Transfer order not found.' });
+      ensureInvIdem();
+      var toDispReqId = String(body.request_id || '').trim().slice(0, 80);
+      var toDispKey = toDispReqId ? 'to_disp|' + toDispId + '|' + toDispReqId : '';
+      if (toDispKey) {
+        var toDispDone = db.prepare('SELECT id FROM inventory_idempotency WHERE id = ?').get(toDispKey);
+        if (toDispDone) return json(res, 200, { transfer_order: db.prepare('SELECT * FROM transfer_orders WHERE id = ?').get(toDispId) });
+      }
       if (toDispRow.status !== 'pending') return json(res, 400, { error: 'Only pending transfers can be dispatched.' });
       var toDispItems = db.prepare('SELECT * FROM transfer_order_items WHERE transfer_id = ?').all(toDispId);
       for (var di = 0; di < toDispItems.length; di++) {
         var srcItem = db.prepare('SELECT * FROM menu_items WHERE id = ? AND store_id = ?').get(toDispItems[di].item_id, toDispStoreId);
         var srcAvail = srcItem && Number(srcItem.stock_qty) >= 0 ? Number(srcItem.stock_qty) : 0;
-        if (!srcItem || srcAvail < Number(toDispItems[di].qty)) {
+var diQty = Number(toDispItems[di].qty);
+if (!isFinite(diQty) || diQty <= 0) return json(res, 400, { error: 'Invalid quantity for item: ' + toDispItems[di].item_name });
+if (!srcItem || srcAvail < diQty) {
           return json(res, 400, { error: 'Insufficient stock for item: ' + toDispItems[di].item_name, available: srcAvail });
         }
       }
-      toDispItems.forEach(function(it) {
-        adjustStock(toDispStoreId, it.item_id, -Number(it.qty), 'transfer_dispatch', { refType: 'transfer_order', refId: toDispId, createdBy: actorName });
-      });
-      db.prepare('UPDATE transfer_orders SET status = ?, dispatched_at = datetime(\'now\') WHERE id = ?').run('in_transit', toDispId);
+      try {
+        db.exec('BEGIN');
+        toDispItems.forEach(function(it) {
+          var toDispAdj = adjustStock(toDispStoreId, it.item_id, -Number(it.qty), 'transfer_dispatch', { refType: 'transfer_order', refId: toDispId, createdBy: actorName });
+          if (!toDispAdj || toDispAdj.error) throw new Error('transfer_dispatch_adjust_failed');
+        });
+        db.prepare('UPDATE transfer_orders SET status = ?, dispatched_at = datetime(\'now\') WHERE id = ?').run('in_transit', toDispId);
+        if (toDispKey) db.prepare('INSERT OR IGNORE INTO inventory_idempotency (id, store_id, kind, ref_id, created_at) VALUES (?, ?, ?, ?, datetime(\'now\'))').run(toDispKey, toDispStoreId, 'transfer_dispatch', toDispId);
+        db.exec('COMMIT');
+      } catch (e) {
+        try { db.exec('ROLLBACK'); } catch(e2){}
+        throw e;
+      }
       return json(res, 200, { transfer_order: db.prepare('SELECT * FROM transfer_orders WHERE id = ?').get(toDispId) });
     }
 
@@ -2171,7 +2354,14 @@ var toId = 'to_' + generateId();
       if (!toRecvStore) return json(res, 404, { error: 'Store not found.' });
       if (requireStoreOwner(res, user, toRecvStore)) return null;
       var toRecvRow = db.prepare('SELECT * FROM transfer_orders WHERE id = ?').get(toRecvId);
-      if (!toRecvRow || toRecvRow.to_store_id !== toRecvStoreId) return json(res, 404, { error: 'Transfer order not found.' });
+           if (!toRecvRow || toRecvRow.to_store_id !== toRecvStoreId) return json(res, 404, { error: 'Transfer order not found.' });
+      ensureInvIdem();
+      var toRecvReqId = String(body.request_id || '').trim().slice(0, 80);
+      var toRecvKey = toRecvReqId ? 'to_recv|' + toRecvId + '|' + toRecvReqId : '';
+      if (toRecvKey) {
+        var toRecvDone = db.prepare('SELECT id FROM inventory_idempotency WHERE id = ?').get(toRecvKey);
+        if (toRecvDone) return json(res, 200, { transfer_order: db.prepare('SELECT * FROM transfer_orders WHERE id = ?').get(toRecvId), warnings: [] });
+      }
       if (toRecvRow.status !== 'in_transit') return json(res, 400, { error: 'Only in-transit transfers can be received.' });
       var toRecvItems = db.prepare('SELECT * FROM transfer_order_items WHERE transfer_id = ?').all(toRecvId);
      var toMissing = [];
@@ -2182,16 +2372,25 @@ toRecvItems.forEach(function(it) {
 if (toMissing.length) {
   return json(res, 400, { error: 'Destination store has no item named: ' + toMissing.join(', ') + '. Add the item first, then receive the transfer.' });
 }
-var toRecvNotes = [];
-      toRecvItems.forEach(function(it) {
-        var destItem = db.prepare('SELECT * FROM menu_items WHERE store_id = ? AND lower(name) = lower(?)').get(toRecvStoreId, it.item_name);
-        if (destItem) {
-          adjustStock(toRecvStoreId, destItem.id, Number(it.qty), 'transfer_receive', { refType: 'transfer_order', refId: toRecvId, createdBy: actorName, allowNegative: true });
-        } else {
-          toRecvNotes.push('No matching item named "' + it.item_name + '" in destination store — add it manually and adjust stock.');
-        }
-      });
-      db.prepare('UPDATE transfer_orders SET status = ?, received_at = datetime(\'now\') WHERE id = ?').run('received', toRecvId);
+      var toRecvNotes = [];
+      try {
+        db.exec('BEGIN');
+        toRecvItems.forEach(function(it) {
+          var destItem = db.prepare('SELECT * FROM menu_items WHERE store_id = ? AND lower(name) = lower(?)').get(toRecvStoreId, it.item_name);
+          if (destItem) {
+            var toRecvAdj = adjustStock(toRecvStoreId, destItem.id, Number(it.qty), 'transfer_receive', { refType: 'transfer_order', refId: toRecvId, createdBy: actorName, allowNegative: true });
+            if (!toRecvAdj || toRecvAdj.error) throw new Error('transfer_receive_adjust_failed');
+          } else {
+            toRecvNotes.push('No matching item named "' + it.item_name + '" in destination store — add it manually and adjust stock.');
+          }
+        });
+        db.prepare('UPDATE transfer_orders SET status = ?, received_at = datetime(\'now\') WHERE id = ?').run('received', toRecvId);
+        if (toRecvKey) db.prepare('INSERT OR IGNORE INTO inventory_idempotency (id, store_id, kind, ref_id, created_at) VALUES (?, ?, ?, ?, datetime(\'now\'))').run(toRecvKey, toRecvStoreId, 'transfer_receive', toRecvId);
+        db.exec('COMMIT');
+      } catch (e) {
+        try { db.exec('ROLLBACK'); } catch(e2){}
+        throw e;
+      }
       return json(res, 200, { transfer_order: db.prepare('SELECT * FROM transfer_orders WHERE id = ?').get(toRecvId), warnings: toRecvNotes });
     }
 
@@ -2216,10 +2415,10 @@ var toRecvNotes = [];
       if (requireStoreOwner(res, user, icStore)) return null;
       var icId = 'ic_' + generateId();
       db.prepare('INSERT INTO inventory_counts (id, store_id, status, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, datetime(\'now\'))')
-        .run(icId, icStoreId, 'draft', String(body.note || ''), actorName);
-      var icExplicitIds = Array.isArray(body.item_ids) ? body.item_ids : null;
+       .run(icId, icStoreId, 'draft', String(body.note || '').slice(0, 500), actorName);
+var icExplicitIds = Array.isArray(body.item_ids) ? body.item_ids.slice(0, 1000) : null;
       var icItemsSrc = icExplicitIds && icExplicitIds.length
-        ? icExplicitIds.map(function(id) { return db.prepare('SELECT * FROM menu_items WHERE id = ? AND store_id = ?').get(id, icStoreId); }).filter(Boolean)
+        ? icExplicitIds.map(function(id) { return db.prepare('SELECT * FROM menu_items WHERE id = ? AND store_id = ?').get(String(id), icStoreId); }).filter(Boolean)
         : db.prepare('SELECT * FROM menu_items WHERE store_id = ? AND stock_qty >= 0').all(icStoreId);
       icItemsSrc.forEach(function(it) {
         var exp = Number(it.stock_qty) >= 0 ? Number(it.stock_qty) : 0;
@@ -2263,12 +2462,13 @@ var toRecvNotes = [];
       if (icSubRow.status === 'finalized' || icSubRow.status === 'cancelled') {
         return json(res, 400, { error: 'Cannot submit a ' + icSubRow.status + ' count.' });
       }
-      var icSubItems = Array.isArray(body.items) ? body.items : [];
+var icSubItems = Array.isArray(body.items) ? body.items.slice(0, 2000) : [];
       icSubItems.forEach(function(it) {
         var row = db.prepare('SELECT * FROM inventory_count_items WHERE count_id = ? AND item_id = ?').get(icSubId, it.item_id);
         if (row) {
          var counted = Number(it.counted_qty);
 if (!isFinite(counted) || counted < 0) counted = 0;
+         if (counted > 100000000) counted = 100000000;
           db.prepare('UPDATE inventory_count_items SET counted_qty = ?, variance = ? WHERE id = ?').run(counted, counted - Number(row.expected_qty), row.id);
         }
       });
@@ -2282,18 +2482,34 @@ if (!isFinite(counted) || counted < 0) counted = 0;
       var icFinStore = switchToStoreOwner(icFinStoreId);
       if (!icFinStore) return json(res, 404, { error: 'Store not found.' });
       if (requireStoreOwner(res, user, icFinStore)) return null;
-      var icFinRow = db.prepare('SELECT * FROM inventory_counts WHERE id = ? AND store_id = ?').get(icFinId, icFinStoreId);
+            var icFinRow = db.prepare('SELECT * FROM inventory_counts WHERE id = ? AND store_id = ?').get(icFinId, icFinStoreId);
       if (!icFinRow) return json(res, 404, { error: 'Inventory count not found.' });
+      ensureInvIdem();
+      var icFinReqId = String(body.request_id || '').trim().slice(0, 80);
+      var icFinKey = icFinReqId ? 'ic_fin|' + icFinId + '|' + icFinReqId : '';
+      if (icFinKey) {
+        var icFinDone = db.prepare('SELECT id FROM inventory_idempotency WHERE id = ?').get(icFinKey);
+        if (icFinDone) return json(res, 200, { inventory_count: db.prepare('SELECT * FROM inventory_counts WHERE id = ?').get(icFinId) });
+      }
       if (icFinRow.status !== 'submitted') return json(res, 400, { error: 'Only submitted counts can be finalized.' });
-      var icFinItems = db.prepare('SELECT * FROM inventory_count_items WHERE count_id = ?').all(icFinId);
-      icFinItems.forEach(function(it) {
-        if (Number(it.variance) !== 0) {
-          adjustStock(icFinStoreId, it.item_id, Number(it.variance), 'count_adjustment', {
-            refType: 'inventory_count', refId: icFinId, createdBy: actorName, reason: 'Physical count adjustment', allowNegative: true
-          });
-        }
-      });
-      db.prepare('UPDATE inventory_counts SET status = ?, finalized_at = datetime(\'now\') WHERE id = ?').run('finalized', icFinId);
+      try {
+        db.exec('BEGIN');
+        var icFinItems = db.prepare('SELECT * FROM inventory_count_items WHERE count_id = ?').all(icFinId);
+        icFinItems.forEach(function(it) {
+          if (Number(it.variance) !== 0) {
+            var icFinAdj = adjustStock(icFinStoreId, it.item_id, Number(it.variance), 'count_adjustment', {
+              refType: 'inventory_count', refId: icFinId, createdBy: actorName, reason: 'Physical count adjustment', allowNegative: true
+            });
+            if (!icFinAdj || icFinAdj.error) throw new Error('count_adjustment_failed');
+          }
+        });
+        db.prepare('UPDATE inventory_counts SET status = ?, finalized_at = datetime(\'now\') WHERE id = ?').run('finalized', icFinId);
+        if (icFinKey) db.prepare('INSERT OR IGNORE INTO inventory_idempotency (id, store_id, kind, ref_id, created_at) VALUES (?, ?, ?, ?, datetime(\'now\'))').run(icFinKey, icFinStoreId, 'inventory_count_finalize', icFinId);
+        db.exec('COMMIT');
+      } catch (e) {
+        try { db.exec('ROLLBACK'); } catch(e2){}
+        throw e;
+      }
       return json(res, 200, { inventory_count: db.prepare('SELECT * FROM inventory_counts WHERE id = ?').get(icFinId) });
     }
 
@@ -2317,10 +2533,24 @@ if (!isFinite(counted) || counted < 0) counted = 0;
       if (!prStore) return json(res, 404, { error: 'Store not found.' });
       if (requireStoreOwner(res, user, prStore)) return null;
       var prIngredients = Array.isArray(body.ingredients) ? body.ingredients : [];
-      if (!body.output_item_id || !prIngredients.length) return json(res, 400, { error: 'output_item_id and ingredients are required.' });
+if (!body.output_item_id || !prIngredients.length) return json(res, 400, { error: 'output_item_id and ingredients are required.' });
+      if (prIngredients.length > 100) return json(res, 400, { error: 'Too many ingredients.' });
+      var prYield = Number(body.yield_qty) || 1;
+      if (!isFinite(prYield) || prYield <= 0 || prYield > 1000000) return json(res, 400, { error: 'Invalid yield_qty.' });
+      if (!db.prepare('SELECT id FROM menu_items WHERE id = ? AND store_id = ?').get(String(body.output_item_id), prStoreId)) return json(res, 404, { error: 'Output item not found.' });
+      var prCleanIngredients = [];
+      for (var pci = 0; pci < prIngredients.length; pci++) {
+        var pcIng = prIngredients[pci] || {};
+        var pcQty = Number(pcIng.qty);
+        var pcItemId = String(pcIng.item_id || '');
+        if (!isFinite(pcQty) || pcQty < 0 || pcQty > 1000000 || (pcQty > 0 && !pcItemId)) return json(res, 400, { error: 'Each ingredient needs an item_id and a non-negative quantity.' });
+        if (pcQty === 0) continue;
+        prCleanIngredients.push({ item_id: pcItemId.slice(0, 60), item_name: String(pcIng.item_name || '').slice(0, 200), qty: pcQty });
+      }
+      if (!prCleanIngredients.length) return json(res, 400, { error: 'At least one ingredient with a positive quantity is required.' });
       var prId = 'pr_' + generateId();
       db.prepare('INSERT INTO production_recipes (id, store_id, output_item_id, output_item_name, yield_qty, ingredients_json, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime(\'now\'))')
-        .run(prId, prStoreId, String(body.output_item_id), String(body.output_item_name || ''), Number(body.yield_qty) || 1, JSON.stringify(prIngredients));
+.run(prId, prStoreId, String(body.output_item_id).slice(0, 60), String(body.output_item_name || '').slice(0, 200), prYield, JSON.stringify(prCleanIngredients));
       return json(res, 200, { recipe: db.prepare('SELECT * FROM production_recipes WHERE id = ?').get(prId) });
     }
 
@@ -2349,11 +2579,19 @@ if (!isFinite(counted) || counted < 0) counted = 0;
       var proStore = switchToStoreOwner(proStoreId);
       if (!proStore) return json(res, 404, { error: 'Store not found.' });
       if (requireStoreOwner(res, user, proStore)) return null;
-      var proQty = Number(body.qty_produced) || 0;
-      if (proQty <= 0) return json(res, 400, { error: 'qty_produced must be greater than 0.' });
+      ensureInvIdem();
+      var proReqId = String(body.request_id || '').trim().slice(0, 80);
+      var proKey = proReqId ? 'pro|' + proStoreId + '|' + proReqId : '';
+      if (proKey) {
+        var proDone = db.prepare('SELECT ref_id FROM inventory_idempotency WHERE id = ?').get(proKey);
+        if (proDone && proDone.ref_id) return json(res, 200, { production_order: db.prepare('SELECT * FROM production_orders WHERE id = ? AND store_id = ?').get(proDone.ref_id, proStoreId) });
+      }
+var proQty = Number(body.qty_produced);
+if (!isFinite(proQty)) proQty = 0;
+if (!isFinite(proQty) || proQty <= 0 || proQty > 1000000) return json(res, 400, { error: 'qty_produced must be greater than 0 and at most 1000000.' });
       var proOutputId = String(body.output_item_id || '');
-      var proOutputName = String(body.output_item_name || '');
-      var proIngredients = Array.isArray(body.ingredients) ? body.ingredients.slice() : null;
+var proOutputName = String(body.output_item_name || '').slice(0, 200);
+var proIngredients = Array.isArray(body.ingredients) ? body.ingredients.slice(0, 100) : null;
       var proRecipeId = body.recipe_id ? String(body.recipe_id) : '';
       if (!proIngredients && proRecipeId) {
         var proRecipe = db.prepare('SELECT * FROM production_recipes WHERE id = ? AND store_id = ?').get(proRecipeId, proStoreId);
@@ -2368,14 +2606,14 @@ if (!isFinite(counted) || counted < 0) counted = 0;
       if (!proIngredients || !proIngredients.length || !proOutputId) {
         return json(res, 400, { error: 'output_item_id and ingredients (or recipe_id) are required.' });
       }
-     var proMerged = {};
+var proMerged = Object.create(null);
 var proBad = false;
 proIngredients.forEach(function(ing) {
   var q = Number(ing && ing.qty) || 0;
   var iid = String((ing && ing.item_id) || '');
-  if (!isFinite(q) || q < 0 || (q > 0 && !iid)) { proBad = true; return; }
+if (!isFinite(q) || q < 0 || q > 1000000 || (q > 0 && !iid)) { proBad = true; return; }
   if (q === 0) return;
-  if (!proMerged[iid]) proMerged[iid] = { item_id: iid, item_name: String(ing.item_name || ''), qty: 0 };
+if (!proMerged[iid]) proMerged[iid] = { item_id: iid, item_name: String(ing.item_name || '').slice(0, 200), qty: 0 };
   proMerged[iid].qty += q;
 });
 if (proBad) return json(res, 400, { error: 'Each ingredient needs an item_id and a non-negative quantity.' });
@@ -2393,17 +2631,27 @@ for (var pi = 0; pi < proIngredients.length; pi++) {
       }
       var proId = 'pro_' + generateId();
       var proTotalCost = 0;
-      proIngredients.forEach(function(ing) {
-        var ingRow2 = db.prepare('SELECT * FROM menu_items WHERE id = ? AND store_id = ?').get(ing.item_id, proStoreId);
-        proTotalCost += (ingRow2 ? Number(ingRow2.cost_price) || 0 : 0) * Number(ing.qty);
-        adjustStock(proStoreId, ing.item_id, -Number(ing.qty), 'production_consume', { refType: 'production_order', refId: proId, createdBy: actorName });
-      });
-      adjustStock(proStoreId, proOutputId, proQty, 'production_output', { refType: 'production_order', refId: proId, createdBy: actorName, allowNegative: true });
-      if (proTotalCost > 0) {
-        db.prepare('UPDATE menu_items SET cost_price = ? WHERE id = ? AND store_id = ?').run(Number((proTotalCost / proQty).toFixed(4)), proOutputId, proStoreId);
+      try {
+        db.exec('BEGIN');
+        proIngredients.forEach(function(ing) {
+          var ingRow2 = db.prepare('SELECT * FROM menu_items WHERE id = ? AND store_id = ?').get(ing.item_id, proStoreId);
+          proTotalCost += (ingRow2 ? Number(ingRow2.cost_price) || 0 : 0) * Number(ing.qty);
+          var proConsumeAdj = adjustStock(proStoreId, ing.item_id, -Number(ing.qty), 'production_consume', { refType: 'production_order', refId: proId, createdBy: actorName });
+          if (!proConsumeAdj || proConsumeAdj.error) throw new Error('production_consume_adjust_failed');
+        });
+        var proOutputAdj = adjustStock(proStoreId, proOutputId, proQty, 'production_output', { refType: 'production_order', refId: proId, createdBy: actorName, allowNegative: true });
+        if (!proOutputAdj || proOutputAdj.error) throw new Error('production_output_adjust_failed');
+        if (proTotalCost > 0) {
+          db.prepare('UPDATE menu_items SET cost_price = ? WHERE id = ? AND store_id = ?').run(Number((proTotalCost / proQty).toFixed(4)), proOutputId, proStoreId);
+        }
+        db.prepare('INSERT INTO production_orders (id, store_id, recipe_id, output_item_id, output_item_name, qty_produced, ingredients_json, total_cost, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))')
+          .run(proId, proStoreId, proRecipeId, proOutputId, proOutputName, proQty, JSON.stringify(proIngredients), proTotalCost, actorName);
+        if (proKey) db.prepare('INSERT OR IGNORE INTO inventory_idempotency (id, store_id, kind, ref_id, created_at) VALUES (?, ?, ?, ?, datetime(\'now\'))').run(proKey, proStoreId, 'production_order', proId);
+        db.exec('COMMIT');
+      } catch (e) {
+        try { db.exec('ROLLBACK'); } catch(e2){}
+        throw e;
       }
-      db.prepare('INSERT INTO production_orders (id, store_id, recipe_id, output_item_id, output_item_name, qty_produced, ingredients_json, total_cost, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))')
-        .run(proId, proStoreId, proRecipeId, proOutputId, proOutputName, proQty, JSON.stringify(proIngredients), proTotalCost, actorName);
       return json(res, 200, { production_order: db.prepare('SELECT * FROM production_orders WHERE id = ?').get(proId) });
     }
 
@@ -2506,7 +2754,7 @@ blkIds = blkIds.slice(0, 100);
       if (!body.name) return json(res, 400, { error: 'name is required.' });
       var stfId = 'stf_' + generateId();
       db.prepare('INSERT INTO staff_members (id, store_id, name, role, phone, email, salary, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))')
-        .run(stfId, stfStoreId, String(body.name), String(body.role || 'staff'), String(body.phone || ''), String(body.email || ''), Number(body.salary) || 0, 'active');
+.run(stfId, stfStoreId, String(body.name).trim().slice(0, 200), String(body.role || 'staff').slice(0, 60), String(body.phone || '').slice(0, 40), String(body.email || '').slice(0, 200), Math.min(100000000, Math.max(0, Number(body.salary) || 0)), 'active');
       return json(res, 200, { staff: db.prepare('SELECT * FROM staff_members WHERE id = ?').get(stfId) });
     }
 
@@ -2528,12 +2776,12 @@ blkIds = blkIds.slice(0, 100);
       var stfPatchRow = db.prepare('SELECT * FROM staff_members WHERE id = ? AND store_id = ?').get(stfPatchId, stfPatchStoreId);
       if (!stfPatchRow) return json(res, 404, { error: 'Staff member not found.' });
       db.prepare('UPDATE staff_members SET name = ?, role = ?, phone = ?, email = ?, salary = ?, status = ? WHERE id = ?').run(
-        body.name != null ? String(body.name) : stfPatchRow.name,
-        body.role != null ? String(body.role) : stfPatchRow.role,
-        body.phone != null ? String(body.phone) : stfPatchRow.phone,
-        body.email != null ? String(body.email) : stfPatchRow.email,
-        body.salary != null ? Number(body.salary) : stfPatchRow.salary,
-        body.status != null ? String(body.status) : stfPatchRow.status,
+body.name != null ? (String(body.name).trim().slice(0, 200) || stfPatchRow.name) : stfPatchRow.name,
+body.role != null ? String(body.role).slice(0, 60) : stfPatchRow.role,
+body.phone != null ? String(body.phone).slice(0, 40) : stfPatchRow.phone,
+        body.email != null ? String(body.email).slice(0, 200) : stfPatchRow.email,
+body.salary != null ? Math.min(100000000, Math.max(0, Number(body.salary) || 0)) : stfPatchRow.salary,
+body.status != null ? String(body.status).trim().slice(0, 30) : stfPatchRow.status,
         stfPatchId
       );
       return json(res, 200, { staff: db.prepare('SELECT * FROM staff_members WHERE id = ?').get(stfPatchId) });
@@ -2556,12 +2804,12 @@ blkIds = blkIds.slice(0, 100);
       if (!expStore) return json(res, 404, { error: 'Store not found.' });
       if (requireStoreOwner(res, user, expStore)) return null;
       var expAmount = Number(body.amount);
-      if (!body.title || !isFinite(expAmount) || expAmount <= 0) {
+if (!body.title || !isFinite(expAmount) || expAmount <= 0 || expAmount > 100000000) {
         return json(res, 400, { error: 'title and a positive amount are required.' });
       }
       var expId = 'exp_' + generateId();
       db.prepare('INSERT INTO business_expenses (id, store_id, title, category, amount, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime(\'now\'))')
-        .run(expId, expStoreId, String(body.title), String(body.category || 'general'), expAmount, String(body.note || ''), actorName);
+       .run(expId, expStoreId, String(body.title).trim().slice(0, 200), String(body.category || 'general').slice(0, 60), expAmount, String(body.note || '').slice(0, 1000), actorName);
       return json(res, 200, { expense: db.prepare('SELECT * FROM business_expenses WHERE id = ?').get(expId) });
     }
 
