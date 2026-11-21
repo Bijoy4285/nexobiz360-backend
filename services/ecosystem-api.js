@@ -926,6 +926,32 @@ if (!skipNotif) {
     }
 
     // ============ BOOKINGS ============
+   if (urlPath.match(/^\/api\/ecosystem\/orders\/[^/]+$/) && method === 'PATCH') {
+      var ordPatchId = urlPath.split('/').pop();
+      var ordPatchRow = scanOne('SELECT o.* FROM store_orders o WHERE o.id = ?', [ordPatchId]);
+      if (!ordPatchRow) return json(res, 404, { error: 'Order not found.' });
+      var ordPatchStore = getStore(ordPatchRow.store_id);
+      if (requireStoreOwner(res, user, ordPatchStore)) return;
+      switchToStoreOwner(ordPatchRow.store_id);
+      var ordPatchPrev = ordPatchRow.status;
+      var ordPatchStatus = ordPatchPrev;
+      var ordPatchPay = ordPatchRow.payment_status;
+      if (body.status !== undefined) {
+        ordPatchStatus = String(body.status).trim().toLowerCase();
+        if (['pending', 'confirmed', 'preparing', 'ready', 'served', 'completed', 'cancelled', 'void'].indexOf(ordPatchStatus) === -1) return json(res, 400, { error: 'Invalid status.' });
+      }
+      if (body.payment_status !== undefined) {
+        ordPatchPay = String(body.payment_status).trim().toLowerCase();
+        if (['unpaid', 'paid', 'partial'].indexOf(ordPatchPay) === -1) return json(res, 400, { error: 'Invalid payment status.' });
+      }
+      if (ordPatchPrev === 'void' && ordPatchStatus !== 'void') return json(res, 409, { error: 'Order is already void.' });
+      db.prepare('UPDATE store_orders SET status=?, payment_status=?, updated_at=datetime(\'now\') WHERE id=?').run(ordPatchStatus, ordPatchPay, ordPatchId);
+      ordPatchRow.status = ordPatchStatus;
+      ordPatchRow.payment_status = ordPatchPay;
+      if (ordPatchRow.customer_phone && ordPatchStatus !== 'void' && ordPatchStatus !== ordPatchPrev) queueMessage(db, ordPatchRow.store_id, 'whatsapp', ordPatchRow.customer_phone, 'Your order at ' + (ordPatchStore && ordPatchStore.name) + ' is now ' + ordPatchStatus + '.', 'order', ordPatchId);
+      ordPatchRow.items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(ordPatchId);
+      return json(res, 200, { ok: true, order: ordPatchRow });
+    }
     if (urlPath.match(/^\/api\/ecosystem\/stores\/[^/]+\/bookings$/) && method === 'POST') {
       var storeId = urlPath.split('/')[4];
       var store = switchToStoreOwner(storeId);
