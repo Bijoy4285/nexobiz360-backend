@@ -843,6 +843,8 @@ var orderId = 'ord_' + generateId();
   var isOrderOwner = canManageStore(user, store);
   if (body.items.length > 50) return json(res, 400, { error: 'Too many items.' });
 var menuPriceMap = Object.create(null);
+  var menuCostMap = Object.create(null);
+  try { db.prepare('SELECT id, cost_price FROM menu_items WHERE store_id = ?').all(storeId).forEach(function(r) { menuCostMap[String(r.id)] = Number(r.cost_price) || 0; }); } catch(e) {}
   try { db.prepare('SELECT id, price FROM menu_items WHERE store_id = ?').all(storeId).forEach(function(r) { menuPriceMap[String(r.id)] = Number(r.price) || 0; }); } catch(e) {}
   var subtotal = 0;
   for (var oi = 0; oi < body.items.length; oi++) {
@@ -896,6 +898,15 @@ if (body.tip && isFinite(Number(body.tip)) && Number(body.tip) > 0 && Number(bod
     insertItem.run('oi_' + generateId(), orderId, String(item.menu_item_id || '').slice(0,60) || null, String(item.name || '').slice(0,120), Number(item.price || 0) || 0, Math.floor(Number(item.qty || 1)) || 1, String(item.note || '').slice(0,300));
   });
 
+try {
+    var tipCol = (isOrderOwner && isFinite(Number(body.tip)) && Number(body.tip) > 0 && Number(body.tip) <= 100000000) ? Number(body.tip) : 0;
+    db.prepare('UPDATE store_orders SET tip = ?, service_amount = ? WHERE id = ?').run(tipCol, serviceAmount, orderId);
+    var costUpd = db.prepare('UPDATE order_items SET cost_price = ? WHERE order_id = ? AND menu_item_id = ?');
+    body.items.forEach(function(item) {
+      var costItemId = String(item.menu_item_id || '').slice(0, 60);
+      costUpd.run(menuCostMap[costItemId] || 0, orderId, costItemId);
+    });
+  } catch (costErr) { console.error('Order tip/cost columns failed:', costErr.message); }
   var order = db.prepare('SELECT * FROM store_orders WHERE id = ?').get(orderId);
   order.items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(orderId);
 
