@@ -486,7 +486,7 @@ return gs;
           rr.forEach(function(r) { r.store_name = storeNameById[r.store_id] || ''; });
           recentReviews = recentReviews.concat(rr);
           sids.forEach(function(sid) {
-            var sr = one('SELECT COALESCE(SUM(total),0) as revenue, COUNT(*) as cnt FROM store_orders WHERE store_id = ?', [sid], {});
+            var sr = one('SELECT COALESCE(SUM(total),0) as revenue, COUNT(*) as cnt FROM store_orders WHERE store_id = ? AND COALESCE(status,\'\') NOT IN (\'void\',\'cancelled\')', [sid], {});
             revenueByStore.push({ id: sid, name: storeNameById[sid], type: storeTypeById[sid], revenue: Number(sr.revenue || 0), order_count: Number(sr.cnt || 0) });
           });
         } finally {
